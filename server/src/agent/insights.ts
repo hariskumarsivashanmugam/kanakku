@@ -176,7 +176,8 @@ function insights(txns: Transaction[], nowMs: number, c: string, last30: ReturnT
   const counts = new Array(7).fill(0);
   for (const t of inRange(txns, nowMs - 60 * DAY, nowMs + 1)) if (t.kind === "payment") counts[new Date(t.date).getUTCDay()]++;
   const total = counts.reduce((a, b) => a + b, 0);
-  if (total >= 20) {
+  // Only meaningful once orders are spread over most of the week.
+  if (total >= 20 && counts.filter((n) => n > 0).length >= 5) {
     const top = counts.indexOf(Math.max(...counts));
     out.push({
       id: "weekday",

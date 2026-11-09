@@ -91,7 +91,11 @@ For development with hot reload, run `npm run dev` and open http://localhost:517
 ### Data modes
 
 - **No PayPal keys:** Kanakku runs on a built-in demo store, *Meena Prints*, a hand-block-printing studio in Coimbatore selling to customers abroad. It has four months of realistic sales, an Indigo cushion cover set with a refund problem, two duplicate charges, overdue boutique invoices and disputes with buyer messages. Refunds, reminders and invoices you approve really change the demo store, and **Reset demo store** on the Activity screen restores it.
-- **With PayPal sandbox keys:** Kanakku reads and acts on your sandbox account. Run `npm run seed` once to create boutique invoices and, if you set `SEED_TEST_CARD_NUMBER` to a [sandbox test card](https://developer.paypal.com/tools/sandbox/card-testing/), captured payments including a duplicate charge. New sandbox payments can take a few hours to appear in Transaction Search; invoices appear right away.
+- **With PayPal sandbox keys:** Kanakku reads and acts on your sandbox account. Fill it with realistic data once:
+  - `npm run seed` creates about 60 card payments across the six products (paid with PayPal's published sandbox test card), two duplicate charges, refunds that make the Indigo cushion covers stand out, and eight boutique invoices (sent, part-paid, paid and a draft). Use `--payments=40` for fewer, or `--only=invoices` / `--only=payments`.
+  - `npm run seed -- --buyer-checkout` walks you through one PayPal checkout as your sandbox buyer, then opening a real dispute against it. PayPal only lets buyers open disputes, so this step is manual.
+  - Invoices show up right away. New payments can take a few hours to appear in PayPal's Transaction Search, and every seeded payment is dated today, so month-on-month comparisons fill in over time.
+  - Card payments need a sandbox business account that can take cards. If the seed script says it can't, create a **United States** business sandbox account and an app linked to it.
 - Force either with `DATA_MODE=demo` or `DATA_MODE=live`.
 
 **PayPal permissions.** New sandbox apps don't have every API turned on. In developer.paypal.com → Apps & Credentials → your sandbox app → **Features**, turn on **Transaction search**, **Invoicing** and **Disputes**, save, then restart the server so it gets a fresh token. If one is missing, Kanakku still loads what it can and names the missing feature on screen.

@@ -24,7 +24,7 @@ export class PayPalSource implements DataSource {
           query: {
             start_date: start,
             end_date: end,
-            fields: "transaction_info,payer_info,cart_info",
+            fields: "transaction_info,payer_info,cart_info,shipping_info",
             page_size: 500,
             page,
           },
@@ -164,9 +164,11 @@ function mapTransaction(d: any): Transaction {
   const amount = Number(ti.transaction_amount?.value ?? 0);
   const fee = Math.abs(Number(ti.fee_amount?.value ?? 0));
   const code: string = ti.transaction_event_code ?? "";
+  // Card payments often have no payer account, so fall back to the shipping name.
   const name =
     pi.payer_name?.alternate_full_name ||
     [pi.payer_name?.given_name, pi.payer_name?.surname].filter(Boolean).join(" ") ||
+    d.shipping_info?.name ||
     pi.email_address ||
     "Unknown";
   const items: any[] = d.cart_info?.item_details ?? [];
