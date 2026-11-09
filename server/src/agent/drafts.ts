@@ -20,18 +20,36 @@ const invoiceDraft = z.object({
 
 export type InvoiceDraft = z.infer<typeof invoiceDraft>;
 
+/**
+ * Asks Claude to fill a form through a tool. Some models don't accept a forced tool_choice, so the tool is
+ * offered normally with a firm instruction, and a JSON object in plain text is accepted as a fallback.
+ */
 async function forcedTool(name: string, description: string, schema: Record<string, unknown>, system: string, user: string) {
   const res = await getLLM().create({
     model: config.model,
-    max_tokens: 1200,
-    system,
+    max_tokens: 1500,
+    system: `${system}\n\nAlways answer by calling the ${name} tool exactly once. Do not reply with text.`,
     tools: [{ name, description, input_schema: schema as any }],
-    tool_choice: { type: "tool", name },
     messages: [{ role: "user", content: user }],
   });
-  const use = res.content.find((b): b is Extract<ContentBlock, { type: "tool_use" }> => b.type === "tool_use");
-  if (!use) throw new Error("The assistant didn't return a draft. Try again.");
-  return use.input;
+  const use = res.content.find((b): b is Extract<ContentBlock, { type: "tool_use" }> => b.type === "tool_use" && b.name === name);
+  if (use) return use.input;
+
+  const text = res.content
+    .filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
+    .map((b) => b.text)
+    .join("\n")
+    .trim();
+  const json = text.match(/\{[\s\S]*\}/);
+  if (json) {
+    try {
+      return JSON.parse(json[0]);
+    } catch {
+      /* not JSON; fall through */
+    }
+  }
+  if (text) return { __text: text };
+  throw new Error("The assistant didn't return a draft. Try again.");
 }
 
 export async function draftInvoiceFromText(text: string): Promise<InvoiceDraft> {
@@ -61,6 +79,7 @@ export async function draftInvoiceFromText(text: string): Promise<InvoiceDraft> 
     "You turn a small seller's message (often a WhatsApp chat or email with a buyer, in any language) into an invoice. Only use facts in the text. If a unit price is given as a total for several items, divide it. Never invent an email address; leave it empty and list it in missing.",
     text.slice(0, 6000),
   );
+  if ((input as { __text?: string }).__text) throw new Error("The assistant couldn't fill in the invoice from that message. Try adding the items and prices.");
   return invoiceDraft.parse(input);
 }
 
@@ -80,7 +99,8 @@ export async function draftDisputeReply(d: Dispute, sellerNote?: string): Promis
       days_left_to_respond: d.daysLeftToRespond,
       seller_note: sellerNote,
     }),
-  )) as { message?: string };
-  if (!input.message) throw new Error("The assistant didn't return a reply. Try again.");
-  return input.message.trim();
+  )) as { message?: string; __text?: string };
+  const message = input.message ?? input.__text;
+  if (!message) throw new Error("The assistant didn't return a reply. Try again.");
+  return message.trim();
 }

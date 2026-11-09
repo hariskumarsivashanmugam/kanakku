@@ -203,7 +203,8 @@ test("brief still loads when one PayPal permission is missing", async () => {
 const forced = (input: unknown) =>
   setLLM({
     async create(params: any) {
-      return { content: [{ type: "tool_use", id: "f", name: params.tool_choice.name, input, caller: { type: "direct" } }] as any, stop_reason: "tool_use" };
+      assert.equal(params.tool_choice, undefined, "no forced tool_choice: some models reject it");
+      return { content: [{ type: "tool_use", id: "f", name: params.tools[0].name, input, caller: { type: "direct" } }] as any, stop_reason: "tool_use" };
     },
   });
 
@@ -259,4 +260,18 @@ test("transactions endpoint marks refunded payments", async () => {
   const rows = await (await fetch(`${base}/api/transactions?days=30`)).json();
   assert.ok(rows.some((r: any) => r.kind === "payment" && r.refunded));
   assert.ok(rows.every((r: any) => r.kind !== "refund" || !r.refunded));
+});
+
+test("drafts still work when the model answers in plain text", async () => {
+  setLLM({
+    async create() {
+      return { content: [{ type: "text", text: 'Here you go: {"customer_name":"Casa Lino","customer_email":"","currency":"USD","items":[{"name":"Tote","quantity":3,"unit_amount":11}],"due_in_days":14,"note":"","missing":["customer email"]}', citations: null }] as any, stop_reason: "end_turn" };
+    },
+  });
+  const draft = await (await post("/api/ai/invoice-draft", { text: "3 totes at $11 for Casa Lino" })).json();
+  assert.equal(draft.items[0].quantity, 3);
+  const dispute = (await (await fetch(`${base}/api/disputes`)).json()).find((d: any) => d.status === "WAITING_FOR_SELLER_RESPONSE");
+  setLLM({ async create() { return { content: [{ type: "text", text: "Hello, I'm sorry for the trouble.", citations: null }] as any, stop_reason: "end_turn" }; } });
+  const { message } = await (await post("/api/ai/dispute-reply", { disputeId: dispute.id })).json();
+  assert.equal(message, "Hello, I'm sorry for the trouble.");
 });
