@@ -5,6 +5,7 @@ import type { Transaction } from "../data/types.js";
 import { round2 } from "../data/util.js";
 import { findDuplicates, invoiceFilter, isOpenDispute, summarize, type GroupBy } from "./analytics.js";
 import { addAction, saveDataset, type Action } from "./store.js";
+import { priceCheck, unitPrice } from "./pricecheck.js";
 
 /**
  * Tools Claude can call. Read tools fetch real data and save it as a dataset the UI can show.
@@ -94,6 +95,9 @@ const schemas = {
     carrier: z.string().describe("e.g. India Post, DHL, FedEx, Blue Dart"),
     reason: z.string(),
   }),
+  check_market_price: z.object({
+    product: z.string().describe("One of the shop's product names, e.g. 'Ajrakh stole'"),
+  }),
   present_answer: z.object({
     summary: z.string().describe("Short answer for the seller in THEIR language, 1-4 sentences, markdown allowed"),
     dataset_id: z.string().optional().describe("Dataset to show in the grid"),
@@ -136,6 +140,8 @@ const descriptions: Record<ToolName, string> = {
     "Prepare PayPal Payouts to artisans for finished jobs, for the seller to approve. Does NOT pay anything by itself.",
   propose_tracking:
     "Prepare adding a shipment tracking number to the PayPal transaction behind a dispute, for the seller to approve.",
+  check_market_price:
+    "Compare the shop's price for a product with similar products sold by other retailers (via Channel3). Returns the typical market price, the range and examples.",
   present_answer:
     "ALWAYS call this last, exactly once, to show the answer: a short summary plus optionally a dataset in the grid and a chart.",
 };
@@ -482,6 +488,16 @@ export async function runTool(name: string, rawInput: unknown, ctx: ToolContext)
       });
       ctx.proposed.push(action);
       return { action_id: action.id, status: "waiting_for_seller_approval" };
+    }
+    case "check_market_price": {
+      const now = Date.now();
+      const txns = await src.listTransactions({ start: new Date(now - 90 * 86_400_000).toISOString(), end: new Date(now).toISOString() });
+      const names = [...new Set(txns.filter((t) => t.kind === "payment").map((t) => t.product.replace(/ ×\d+$/, "")))];
+      const name = names.find((n) => n.toLowerCase() === input.product.toLowerCase()) ?? names.find((n) => n.toLowerCase().includes(input.product.toLowerCase()));
+      if (!name) throw new Error(`No recent sales of "${input.product}". Products: ${names.join(", ")}`);
+      const pc = await priceCheck(name, unitPrice(txns, name)!, txns[0]?.currency ?? "USD");
+      const ds = saveDataset(`Similar to ${name}`, pc.comparables.map((c) => ({ product: c.title, retailer: c.merchant, price: c.price, currency: c.currency })));
+      return { dataset_id: ds.id, product: name, your_price: pc.yourPrice, typical_market_price: pc.median, range: [pc.low, pc.high], verdict: pc.verdict, summary: pc.summary, examples: pc.comparables.slice(0, 6) };
     }
     case "present_answer": {
       ctx.presented = input;

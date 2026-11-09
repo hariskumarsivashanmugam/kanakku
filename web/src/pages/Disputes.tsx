@@ -113,6 +113,8 @@ function DisputeCase({ d, focus }: { d: Dispute; focus: boolean }) {
         </ol>
       ) : null}
 
+      {isOpen(d) && <Tracking d={d} />}
+
       {canReply && (
         <div className="case-reply">
           {!reply ? (
@@ -155,5 +157,67 @@ function DisputeCase({ d, focus }: { d: Dispute; focus: boolean }) {
         </div>
       )}
     </article>
+  );
+}
+
+const CARRIERS = ["India Post", "DHL", "FedEx", "Blue Dart", "DTDC", "Aramex", "UPS", "USPS", "Royal Mail"];
+
+/** Proof of shipping usually decides "item not received" cases, so send the tracking number to PayPal. */
+function Tracking({ d }: { d: Dispute }) {
+  const { propose } = useApp();
+  const [open, setOpen] = useState(false);
+  const [carrier, setCarrier] = useState("India Post");
+  const [number, setNumber] = useState("");
+  if (d.tracking) {
+    return (
+      <p className="tracking-done">
+        Tracking on PayPal: {d.tracking.carrier} {d.tracking.number}
+      </p>
+    );
+  }
+  if (!d.transactionId) return null;
+  const notReceived = d.reason === "MERCHANDISE_OR_SERVICE_NOT_RECEIVED";
+  return (
+    <div className="tracking">
+      {!open ? (
+        <p className="row-gap">
+          <button className={notReceived ? "ghost" : "link"} onClick={() => setOpen(true)}>
+            Add tracking number
+          </button>
+          {notReceived && <span className="muted">Proof of delivery is what usually wins an “item not received” case.</span>}
+        </p>
+      ) : (
+        <form
+          className="tracking-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            propose(
+              "propose_tracking",
+              { dispute_id: d.id, tracking_number: number.trim(), carrier, reason: `Proof of shipping for ${d.customer}'s ${humanReason(d.reason).toLowerCase()} case.` },
+              "Disputes page: add tracking",
+            ).then((a) => a && setOpen(false));
+          }}
+        >
+          <label>
+            Carrier
+            <select value={carrier} onChange={(e) => setCarrier(e.target.value)}>
+              {CARRIERS.map((c) => (
+                <option key={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Tracking number
+            <input value={number} onChange={(e) => setNumber(e.target.value)} required minLength={4} placeholder="e.g. EE123456789IN" />
+          </label>
+          <button className="primary" type="submit" disabled={number.trim().length < 4}>
+            Review and send to PayPal
+          </button>
+          <button className="ghost" type="button" onClick={() => setOpen(false)}>
+            Cancel
+          </button>
+        </form>
+      )}
+    </div>
   );
 }

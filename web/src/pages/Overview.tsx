@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { AgCharts } from "ag-charts-react";
 import type { AgChartOptions } from "ag-charts-community";
 import { AgGridReact } from "ag-grid-react";
@@ -9,6 +9,7 @@ import { chartBase, useGridTheme, usePalette } from "../theme";
 import { RichText } from "../RichText";
 import { AskButton, Loading, Notice } from "../components";
 import { navigate } from "../router";
+import { PriceCheckDialog } from "../PriceCheck";
 
 export function Overview() {
   const { lang } = useApp();
@@ -251,6 +252,8 @@ function Attention({ d }: { d: OverviewData }) {
 
 function ProductsGrid({ rows, currency }: { rows: OverviewData["topProducts"]; currency: string }) {
   const theme = useGridTheme();
+  const { status } = useApp();
+  const [checking, setChecking] = useState<string | null>(null);
   const cols = useMemo<ColDef[]>(
     (): ColDef[] => [
       { field: "product", headerName: "Product", flex: 2, minWidth: 180 },
@@ -272,12 +275,30 @@ function ProductsGrid({ rows, currency }: { rows: OverviewData["topProducts"]; c
         valueFormatter: (v) => `${v.value.toFixed(1)}%`,
         cellClassRules: { "cell-urgent": (v) => v.value >= 10 },
       },
+      {
+        headerName: "Market price",
+        width: 150,
+        sortable: false,
+        cellRenderer: (p: { data: OverviewData["topProducts"][number] }) => (
+          <button
+            className="ask-link"
+            onClick={() => setChecking(p.data.product)}
+            disabled={!status?.priceCheckReady}
+            title={status?.priceCheckReady ? "Compare with similar products at other retailers" : "Add CHANNEL3_API_KEY to .env to compare prices"}
+          >
+            Check price
+          </button>
+        ),
+      },
     ],
-    [currency],
+    [currency, status?.priceCheckReady],
   );
   return (
-    <div style={{ height: 56 + Math.max(3, rows.length) * 44 }}>
-      <AgGridReact theme={theme} rowData={rows} columnDefs={cols} suppressCellFocus />
-    </div>
+    <>
+      <div style={{ height: 56 + Math.max(3, rows.length) * 44 }}>
+        <AgGridReact theme={theme} rowData={rows} columnDefs={cols} suppressCellFocus />
+      </div>
+      <PriceCheckDialog product={checking} onClose={() => setChecking(null)} />
+    </>
   );
 }

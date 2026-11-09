@@ -304,10 +304,7 @@ export class DemoSource implements DataSource {
 
   async addTracking(input: { transactionId: string; trackingNumber: string; carrier: string }) {
     const d = this.data.disputes.find((x) => x.transactionId === input.transactionId);
-    if (d) {
-      d.messages = [...(d.messages ?? []), { from: "seller", text: `Tracking added: ${input.carrier} ${input.trackingNumber}`, at: new Date().toISOString() }];
-      d.tracking = { carrier: input.carrier, number: input.trackingNumber };
-    }
+    if (d) d.tracking = { carrier: input.carrier, number: input.trackingNumber };
     return { status: "SHIPPED" };
   }
 

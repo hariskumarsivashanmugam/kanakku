@@ -10,6 +10,7 @@ import { PayPalError } from "./paypal/client.js";
 import { ask, writeBrief, type ChatTurn } from "./agent/agent.js";
 import { briefFacts } from "./agent/analytics.js";
 import { buildOverview } from "./agent/insights.js";
+import { priceCheck, unitPrice } from "./agent/pricecheck.js";
 import { draftDisputeReply, draftInvoiceFromText } from "./agent/drafts.js";
 import { clearActions, getAction, listActions } from "./agent/store.js";
 import { getAutopilot, resetAutopilot, runAutopilot, updateRule, updateSchedule } from "./agent/autopilot.js";
@@ -64,7 +65,7 @@ export function createApp() {
   app.use(express.json({ limit: "200kb" }));
 
   app.get("/api/status", (_req, res) => {
-    res.json({ dataMode: getSource().mode, aiReady: Boolean(config.anthropicKey), model: config.model });
+    res.json({ dataMode: getSource().mode, aiReady: Boolean(config.anthropicKey), model: config.model, priceCheckReady: Boolean(config.channel3.key) });
   });
 
   // ---------- screens ----------
@@ -157,6 +158,22 @@ export function createApp() {
     if (typeof b.pay === "number") patch.pay = b.pay;
     try {
       res.json(getWorkshop().updateJob(req.params.id, patch));
+    } catch (e) {
+      res.status(400).json({ error: (e as Error).message });
+    }
+  });
+
+  // ---------- price check (Channel3) ----------
+
+  app.get("/api/price-check", async (req, res) => {
+    const product = String(req.query.product ?? "").trim();
+    if (!product) return void res.status(400).json({ error: "Which product?" });
+    const now = Date.now();
+    const txns = await getSource().listTransactions({ start: new Date(now - 90 * DAY).toISOString(), end: new Date(now).toISOString() });
+    const price = unitPrice(txns, product);
+    if (price === null) return void res.status(404).json({ error: `No recent sales of ${product} to compare.` });
+    try {
+      res.json(await priceCheck(product, price, txns[0]?.currency ?? "USD"));
     } catch (e) {
       res.status(400).json({ error: (e as Error).message });
     }

@@ -19,6 +19,10 @@ export const config = {
     baseUrl: process.env.PAYPAL_BASE_URL || "https://api-m.sandbox.paypal.com",
   },
   dataMode: (process.env.DATA_MODE as DataMode) || "auto",
+  channel3: {
+    key: process.env.CHANNEL3_API_KEY ?? "",
+    baseUrl: process.env.CHANNEL3_BASE_URL || "https://api.trychannel3.com",
+  },
   seedCard: {
     number: process.env.SEED_TEST_CARD_NUMBER ?? "",
     expiry: process.env.SEED_TEST_CARD_EXPIRY || "2030-12",

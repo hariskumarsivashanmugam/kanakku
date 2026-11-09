@@ -33,6 +33,20 @@ export interface Status {
   dataMode: "live" | "demo";
   aiReady: boolean;
   model: string;
+  priceCheckReady?: boolean;
+}
+
+export interface PriceCheck {
+  product: string;
+  yourPrice: number;
+  currency: string;
+  comparables: { title: string; merchant: string; price: number; currency: string; url?: string; image?: string }[];
+  median: number | null;
+  low: number | null;
+  high: number | null;
+  verdict: "below" | "in_line" | "above" | "unknown";
+  summary: string;
+  checkedAt: string;
 }
 
 export interface AttentionFacts {
@@ -221,6 +235,7 @@ export const api = {
   ask: (question: string, history: { role: "user" | "assistant"; text: string }[]) => call<Answer>("/api/ask", post({ question, history })),
   invoiceDraft: (text: string) => call<InvoiceDraft>("/api/ai/invoice-draft", post({ text })),
   disputeReply: (disputeId: string, note?: string) => call<{ message: string }>("/api/ai/dispute-reply", post({ disputeId, note })),
+  priceCheck: (product: string) => call<PriceCheck>(`/api/price-check?product=${encodeURIComponent(product)}`),
   workshop: () => call<Workshop>("/api/workshop"),
   createJob: (job: { artisanId: string; title: string; customer?: string; start: string; end: string; pay: number }) => call<Job>("/api/workshop/jobs", post(job)),
   updateJob: (id: string, patch: Partial<Pick<Job, "start" | "end" | "artisanId" | "status" | "title" | "pay">>) =>
