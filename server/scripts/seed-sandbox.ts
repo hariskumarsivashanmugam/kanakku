@@ -20,6 +20,10 @@
 import { randomUUID } from "node:crypto";
 import { config, hasPayPalKeys } from "../src/config.js";
 import { paypal, PayPalError } from "../src/paypal/client.js";
+import { addToLedger, ledgerPath } from "../src/data/ledger.js";
+
+/** Kanakku reads these orders live from the Orders API, so they show up without waiting for Transaction Search. */
+const remember = (orderId: string) => addToLedger(config.paypal.baseUrl, config.paypal.clientId, [orderId]);
 
 // ---------------- options ----------------
 
@@ -128,6 +132,7 @@ async function cardPayment(product: (typeof PRODUCTS)[number], buyer: string, qt
     capture = cap.purchase_units?.[0]?.payments?.captures?.[0];
   }
   if (!capture?.id) throw new Error(`Order ${order.id} was not captured (status ${order.status}).`);
+  remember(order.id);
   return { captureId: capture.id, product: product.name, amount, customer: buyer };
 }
 
@@ -341,6 +346,7 @@ async function buyerCheckout() {
     if (o.status === "APPROVED") {
       const cap = await paypal<any>({ method: "POST", path: `/v2/checkout/orders/${order.id}/capture`, body: {}, idempotent: true });
       const capture = cap.purchase_units?.[0]?.payments?.captures?.[0];
+      remember(order.id);
       console.log(`  ✓ Paid by your sandbox buyer (capture ${capture?.id}).
 
   3. Now open the dispute, as the buyer:
@@ -382,10 +388,11 @@ async function main() {
   if (ONLY !== "payments") await seedInvoices();
 
   console.log(`
-Done. In Kanakku (DATA_MODE=auto or live):
-  • Invoices appear right away on the Invoices screen.
-  • Payments, refunds and duplicate charges appear on Overview and Sales once Transaction search is enabled
-    on your app. PayPal can take a few hours to list new sandbox payments.
+Done. In Kanakku (DATA_MODE=auto or live), refresh the page:
+  • Payments, refunds and duplicate charges show on Overview and Sales right away. Kanakku reads these
+    orders live from PayPal's Orders API (their ids are kept in ${ledgerPath}).
+  • Invoices show on the Invoices screen.
+  • Once Transaction search is enabled on your app, the rest of your PayPal history is merged in too.
   • For a real dispute, run: npm run seed -- --buyer-checkout`);
 }
 

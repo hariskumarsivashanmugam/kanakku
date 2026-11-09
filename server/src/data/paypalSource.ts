@@ -1,10 +1,13 @@
+import { config } from "../config.js";
 import { paypal } from "../paypal/client.js";
+import { addToLedger, readLedger } from "./ledger.js";
 import type { DataSource, Dispute, Invoice, InvoiceStatus, NewInvoiceInput, Transaction, TxnKind } from "./types.js";
 import { daysBetween, round2, todayISO } from "./util.js";
 
 /**
  * Reads and acts on a real PayPal (sandbox) account through the REST APIs:
  *  - Transaction Search  GET  /v1/reporting/transactions
+ *  - Orders v2           GET  /v2/checkout/orders/{id}   (orders this shop created; see ledger.ts)
  *  - Invoicing v2        GET  /v2/invoicing/invoices, POST .../remind, .../send
  *  - Disputes            GET  /v1/customer/disputes
  *  - Payments v2         POST /v2/payments/captures/{id}/refund
@@ -12,7 +15,57 @@ import { daysBetween, round2, todayISO } from "./util.js";
 export class PayPalSource implements DataSource {
   readonly mode = "live" as const;
 
+  private orderCache = new Map<string, { at: number; txns: Transaction[] }>();
+
+  /**
+   * Sales come from two places, merged by transaction id:
+   *  1. Transaction Search, PayPal's full history. It needs the "Transaction search" app feature and lists
+   *     new sandbox payments only after a delay of up to a few hours.
+   *  2. The orders this shop created, read live from the Orders API. Works immediately.
+   */
   async listTransactions(range: { start: string; end: string }): Promise<Transaction[]> {
+    const [search, orders] = await Promise.allSettled([this.searchTransactions(range), this.ledgerTransactions(range)]);
+    const fromOrders = orders.status === "fulfilled" ? orders.value : [];
+    if (search.status === "rejected" && fromOrders.length === 0) throw search.reason;
+    const byId = new Map<string, Transaction>();
+    for (const t of fromOrders) byId.set(t.id, t);
+    // Transaction Search has richer data (payer emails, exact fees), so it wins when both have a transaction.
+    if (search.status === "fulfilled") for (const t of search.value) byId.set(t.id, { ...byId.get(t.id), ...t, product: t.product !== "—" ? t.product : byId.get(t.id)?.product ?? t.product, customer: t.customer !== "Unknown" ? t.customer : byId.get(t.id)?.customer ?? t.customer });
+    return [...byId.values()].sort((a, b) => b.date.localeCompare(a.date));
+  }
+
+  private async ledgerTransactions(range: { start: string; end: string }): Promise<Transaction[]> {
+    const ids = readLedger(config.paypal.baseUrl, config.paypal.clientId);
+    const out: Transaction[] = [];
+    let next = 0;
+    const worker = async () => {
+      while (next < ids.length) {
+        const id = ids[next++];
+        const cached = this.orderCache.get(id);
+        if (cached && Date.now() - cached.at < 60_000) {
+          out.push(...cached.txns);
+          continue;
+        }
+        try {
+          const order = await paypal<any>({ path: `/v2/checkout/orders/${encodeURIComponent(id)}` });
+          const txns = mapOrder(order);
+          this.orderCache.set(id, { at: Date.now(), txns });
+          out.push(...txns);
+        } catch {
+          /* an order we can't read is skipped */
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(8, ids.length) }, worker));
+    return out.filter((t) => t.date >= range.start && t.date <= range.end);
+  }
+
+  /** Remembers orders created outside Transaction Search's reach (e.g. by the seed script). */
+  rememberOrders(orderIds: string[]) {
+    addToLedger(config.paypal.baseUrl, config.paypal.clientId, orderIds);
+  }
+
+  private async searchTransactions(range: { start: string; end: string }): Promise<Transaction[]> {
     const out: Transaction[] = [];
     // Transaction Search allows at most 31 days per request.
     for (const [start, end] of splitRange(range.start, range.end, 30)) {
@@ -76,6 +129,7 @@ export class PayPalSource implements DataSource {
   }
 
   async refundPayment(input: { transactionId: string; amount?: number; currency?: string; note?: string }) {
+    this.orderCache.clear();
     const body: Record<string, unknown> = {};
     if (input.amount !== undefined) {
       body.amount = { value: input.amount.toFixed(2), currency_code: input.currency ?? "USD" };
@@ -157,6 +211,66 @@ export class PayPalSource implements DataSource {
 }
 
 // ---------- mapping helpers ----------
+
+/** One Orders API order → its payment plus any refunds against it. */
+function mapOrder(o: any): Transaction[] {
+  const pu = o.purchase_units?.[0] ?? {};
+  const cap = pu.payments?.captures?.[0];
+  if (!cap) return [];
+  const items: any[] = pu.items ?? [];
+  const product =
+    items.map((i) => (Number(i.quantity) > 1 ? `${i.name} ×${i.quantity}` : i.name)).join(", ") || pu.description || "—";
+  const ps = o.payment_source ?? {};
+  const customer =
+    pu.shipping?.name?.full_name ||
+    [o.payer?.name?.given_name, o.payer?.name?.surname].filter(Boolean).join(" ") ||
+    ps.card?.name ||
+    [ps.paypal?.name?.given_name, ps.paypal?.name?.surname].filter(Boolean).join(" ") ||
+    "Unknown";
+  const email = o.payer?.email_address || ps.paypal?.email_address || "";
+  const amount = Number(cap.amount?.value ?? 0);
+  const fee = Number(cap.seller_receivable_breakdown?.paypal_fee?.value ?? 0);
+  const currency = cap.amount?.currency_code ?? "USD";
+  const status: Transaction["status"] = ["COMPLETED", "REFUNDED", "PARTIALLY_REFUNDED"].includes(cap.status)
+    ? "completed"
+    : cap.status === "PENDING"
+      ? "pending"
+      : "denied";
+  const out: Transaction[] = [
+    {
+      id: cap.id,
+      date: cap.create_time ?? o.create_time,
+      kind: "payment",
+      status,
+      amount,
+      fee,
+      net: round2(amount - fee),
+      currency,
+      customer,
+      customerEmail: email,
+      product,
+    },
+  ];
+  for (const r of pu.payments?.refunds ?? []) {
+    if (r.status !== "COMPLETED") continue;
+    const v = Number(r.amount?.value ?? 0);
+    out.push({
+      id: r.id,
+      date: r.create_time ?? cap.create_time,
+      kind: "refund",
+      status: "completed",
+      amount: -v,
+      fee: 0,
+      net: -v,
+      currency: r.amount?.currency_code ?? currency,
+      customer,
+      customerEmail: email,
+      product,
+      refundOf: cap.id,
+    });
+  }
+  return out;
+}
 
 function mapTransaction(d: any): Transaction {
   const ti = d.transaction_info ?? {};

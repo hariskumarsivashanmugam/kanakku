@@ -53,7 +53,7 @@ Three design choices keep it trustworthy:
 
 | What | Endpoint |
 | --- | --- |
-| Sales, refunds, fees, payouts | `GET /v1/reporting/transactions` (Transaction Search) |
+| Sales, refunds, fees, payouts | `GET /v1/reporting/transactions` (Transaction Search), merged with `GET /v2/checkout/orders/{id}` for the shop's own orders |
 | Invoices | `GET /v2/invoicing/invoices` |
 | Payment reminders | `POST /v2/invoicing/invoices/{id}/remind` |
 | New invoices | `POST /v2/invoicing/invoices` and `.../{id}/send` |
@@ -94,7 +94,7 @@ For development with hot reload, run `npm run dev` and open http://localhost:517
 - **With PayPal sandbox keys:** Kanakku reads and acts on your sandbox account. Fill it with realistic data once:
   - `npm run seed` creates about 60 card payments across the six products (paid with PayPal's published sandbox test card), two duplicate charges, refunds that make the Indigo cushion covers stand out, and eight boutique invoices (sent, part-paid, paid and a draft). Use `--payments=40` for fewer, or `--only=invoices` / `--only=payments`.
   - `npm run seed -- --buyer-checkout` walks you through one PayPal checkout as your sandbox buyer, then opening a real dispute against it. PayPal only lets buyers open disputes, so this step is manual.
-  - Invoices show up right away. New payments can take a few hours to appear in PayPal's Transaction Search, and every seeded payment is dated today, so month-on-month comparisons fill in over time.
+  - Everything shows up right away. Kanakku keeps the ids of the orders it creates (in `.kanakku/sandbox-orders.json`) and reads each one live from PayPal's Orders API, so it doesn't have to wait for Transaction Search, which needs its own app permission and lists new sandbox payments only after a delay. Once Transaction Search works, the rest of your PayPal history is merged in. Every seeded payment is dated today, so month-on-month comparisons fill in over time.
   - Card payments need a sandbox business account that can take cards. If the seed script says it can't, create a **United States** business sandbox account and an app linked to it.
 - Force either with `DATA_MODE=demo` or `DATA_MODE=live`.
 
