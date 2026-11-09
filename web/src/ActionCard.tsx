@@ -5,6 +5,8 @@ export function approveLabel(a: Action) {
   if (a.type === "refund") return a.moneyOut ? `Approve and refund ${money(a.moneyOut.amount, a.moneyOut.currency)}` : "Approve and refund";
   if (a.type === "invoice_reminder") return a.steps.length === 1 ? "Approve and send reminder" : `Approve and send ${a.steps.length} reminders`;
   if (a.type === "dispute_reply") return "Approve and send reply";
+  if (a.type === "artisan_payout") return a.moneyOut ? `Approve and pay ${money(a.moneyOut.amount, a.moneyOut.currency)}` : "Approve and pay";
+  if (a.type === "add_tracking") return "Approve and send to PayPal";
   return "Approve and send invoice";
 }
 
@@ -13,6 +15,8 @@ const doneWord: Record<Action["type"], string> = {
   invoice_reminder: "Reminders sent",
   create_invoice: "Invoice sent",
   dispute_reply: "Reply sent",
+  artisan_payout: "Paid through PayPal",
+  add_tracking: "Tracking added",
 };
 
 export function stateLabel(a: Action) {

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
-export type Page = "overview" | "sales" | "invoices" | "disputes" | "activity";
-const PAGES: Page[] = ["overview", "sales", "invoices", "disputes", "activity"];
+export type Page = "overview" | "sales" | "invoices" | "disputes" | "workshop" | "autopilot" | "activity";
+const PAGES: Page[] = ["overview", "sales", "invoices", "disputes", "workshop", "autopilot", "activity"];
 
 function parse(): { page: Page; arg: string | null } {
   const [p, arg] = window.location.hash.replace(/^#\/?/, "").split("/");

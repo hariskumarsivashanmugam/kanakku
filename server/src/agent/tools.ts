@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Tool } from "@anthropic-ai/sdk/resources/messages";
-import { getSource } from "../data/index.js";
+import { getSource, getWorkshop } from "../data/index.js";
 import type { Transaction } from "../data/types.js";
 import { round2 } from "../data/util.js";
 import { findDuplicates, invoiceFilter, isOpenDispute, summarize, type GroupBy } from "./analytics.js";
@@ -70,6 +70,30 @@ const schemas = {
     message: z.string().min(10).max(2000).describe("The reply to the buyer, in English, polite and specific"),
     reason: z.string(),
   }),
+  list_workshop: z.object({
+    status: z.enum(["planned", "in_progress", "done", "paid", "unpaid", "all"]).default("all").describe("'unpaid' = finished but not paid yet"),
+    artisan: z.string().optional(),
+  }),
+  schedule_job: z.object({
+    job_id: z.string().optional().describe("Existing job to move or update; omit to create a new job"),
+    artisan: z.string().optional().describe("Artisan id or full name"),
+    title: z.string().optional(),
+    customer: z.string().optional(),
+    start_date: z.string().optional().describe("YYYY-MM-DD"),
+    end_date: z.string().optional().describe("YYYY-MM-DD, the day after the last working day"),
+    pay: z.number().optional().describe("What the artisan is paid for the job, in USD"),
+    status: z.enum(["planned", "in_progress", "done"]).optional(),
+  }),
+  propose_artisan_payouts: z.object({
+    job_ids: z.array(z.string()).min(1).describe("Finished (done) jobs to pay for"),
+    reason: z.string(),
+  }),
+  propose_tracking: z.object({
+    dispute_id: z.string(),
+    tracking_number: z.string().min(4),
+    carrier: z.string().describe("e.g. India Post, DHL, FedEx, Blue Dart"),
+    reason: z.string(),
+  }),
   present_answer: z.object({
     summary: z.string().describe("Short answer for the seller in THEIR language, 1-4 sentences, markdown allowed"),
     dataset_id: z.string().optional().describe("Dataset to show in the grid"),
@@ -105,6 +129,13 @@ const descriptions: Record<ToolName, string> = {
   propose_new_invoice: "Prepare a new invoice to create and send, for the seller to approve. Does NOT send anything by itself.",
   propose_dispute_reply:
     "Prepare a reply to the buyer on a dispute, for the seller to approve. Does NOT send anything by itself.",
+  list_workshop: "List the artisans and the production jobs scheduled with them: dates, pay, status and payout status.",
+  schedule_job:
+    "Create a production job for an artisan, or move/reassign/update an existing one. This only changes the schedule; it never pays anyone.",
+  propose_artisan_payouts:
+    "Prepare PayPal Payouts to artisans for finished jobs, for the seller to approve. Does NOT pay anything by itself.",
+  propose_tracking:
+    "Prepare adding a shipment tracking number to the PayPal transaction behind a dispute, for the seller to approve.",
   present_answer:
     "ALWAYS call this last, exactly once, to show the answer: a short summary plus optionally a dataset in the grid and a chart.",
 };
@@ -154,6 +185,7 @@ function zodToJsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
 export interface ToolContext {
   question: string;
   proposed: Action[];
+  changedSchedule?: boolean;
   presented?: z.infer<typeof schemas.present_answer>;
 }
 
@@ -179,7 +211,7 @@ function preview<T>(rows: T[], n = 25) {
   return { count: rows.length, rows: rows.slice(0, n), truncated: rows.length > n };
 }
 
-export const PROPOSE_TOOLS = ["propose_refunds", "propose_invoice_reminders", "propose_new_invoice", "propose_dispute_reply"] as const;
+export const PROPOSE_TOOLS = ["propose_refunds", "propose_invoice_reminders", "propose_new_invoice", "propose_dispute_reply", "propose_artisan_payouts", "propose_tracking"] as const;
 
 export async function runTool(name: string, rawInput: unknown, ctx: ToolContext): Promise<unknown> {
   if (!(name in schemas)) throw new Error(`Unknown tool ${name}`);
@@ -361,6 +393,96 @@ export async function runTool(name: string, rawInput: unknown, ctx: ToolContext)
       ctx.proposed.push(action);
       return { action_id: action.id, status: "waiting_for_seller_approval" };
     }
+    case "list_workshop": {
+      const w = getWorkshop().get();
+      const name = (id: string) => w.artisans.find((a) => a.id === id)?.name ?? id;
+      let jobs = w.jobs;
+      if (input.status === "unpaid") jobs = jobs.filter((j) => j.status === "done");
+      else if (input.status !== "all") jobs = jobs.filter((j) => j.status === input.status);
+      if (input.artisan) {
+        const q = input.artisan.toLowerCase();
+        jobs = jobs.filter((j) => name(j.artisanId).toLowerCase().includes(q) || j.artisanId === input.artisan);
+      }
+      const rows = jobs
+        .sort((a, b) => a.start.localeCompare(b.start))
+        .map((j) => ({
+          id: j.id,
+          artisan: name(j.artisanId),
+          job: j.title,
+          customer: j.customer ?? "",
+          start: j.start,
+          end: j.end,
+          pay: j.pay,
+          currency: j.currency,
+          status: j.status,
+          payout_status: j.payout?.status ?? "",
+        }));
+      const ds = saveDataset("Workshop jobs", rows);
+      return { dataset_id: ds.id, artisans: w.artisans.map((a) => ({ id: a.id, name: a.name, craft: a.craft, place: a.place })), ...preview(rows, 40) };
+    }
+    case "schedule_job": {
+      const ws = getWorkshop();
+      const artisanId = input.artisan ? ws.artisan(input.artisan)?.id : undefined;
+      if (input.artisan && !artisanId) throw new Error(`No artisan called ${input.artisan}. Use list_workshop to see them.`);
+      if (input.job_id) {
+        const job = ws.updateJob(input.job_id, {
+          ...(artisanId ? { artisanId } : {}),
+          ...(input.start_date ? { start: input.start_date } : {}),
+          ...(input.end_date ? { end: input.end_date } : {}),
+          ...(input.title ? { title: input.title } : {}),
+          ...(input.pay !== undefined ? { pay: input.pay } : {}),
+          ...(input.status ? { status: input.status } : {}),
+        });
+        ctx.changedSchedule = true;
+        return { updated: job };
+      }
+      if (!artisanId || !input.title || !input.start_date || !input.end_date || input.pay === undefined) {
+        throw new Error("To create a job I need artisan, title, start_date, end_date and pay.");
+      }
+      const job = ws.createJob({ artisanId, title: input.title, customer: input.customer, start: input.start_date, end: input.end_date, pay: input.pay, ...(input.status ? { status: input.status } : {}) });
+      ctx.changedSchedule = true;
+      return { created: job };
+    }
+    case "propose_artisan_payouts": {
+      const ws = getWorkshop();
+      const steps = input.job_ids.map((id: string) => {
+        const j = ws.job(id);
+        if (!j) throw new Error(`Job ${id} not found. Use list_workshop first.`);
+        if (j.status === "paid") throw new Error(`"${j.title}" has already been paid.`);
+        if (j.status !== "done") throw new Error(`"${j.title}" isn't finished yet (status ${j.status}). Mark it done first.`);
+        const a = ws.artisan(j.artisanId)!;
+        return { label: `Pay ${a.name} ${j.currency} ${j.pay.toFixed(2)} for “${j.title}” (to ${a.email})`, payload: { jobId: j.id }, money: j.pay, currency: j.currency };
+      });
+      const action = addAction({
+        type: "artisan_payout",
+        title: steps.length === 1 ? "Pay 1 artisan" : `Pay ${steps.length} artisans`,
+        reason: input.reason,
+        moneyOut: { amount: round2(steps.reduce((s: number, x: any) => s + x.money, 0)), currency: steps[0].currency },
+        steps: steps.map(({ label, payload }: any) => ({ label, payload })),
+        requestedBy: ctx.question,
+      });
+      ctx.proposed.push(action);
+      return { action_id: action.id, status: "waiting_for_seller_approval", steps: action.steps.map((s) => s.label) };
+    }
+    case "propose_tracking": {
+      const d = (await src.listDisputes()).find((x) => x.id === input.dispute_id);
+      if (!d) throw new Error(`Dispute ${input.dispute_id} not found. Use list_disputes first.`);
+      if (!d.transactionId) throw new Error(`PayPal didn't say which payment dispute ${d.id} is about, so tracking can't be attached.`);
+      const action = addAction({
+        type: "add_tracking",
+        title: `Add tracking to ${d.customer}'s order`,
+        reason: input.reason,
+        steps: [
+          {
+            label: `Send ${input.carrier} tracking number ${input.tracking_number} to PayPal for payment ${d.transactionId} (dispute ${d.id})`,
+            payload: { transactionId: d.transactionId, trackingNumber: input.tracking_number, carrier: input.carrier },
+          },
+        ],
+        requestedBy: ctx.question,
+      });
+      ctx.proposed.push(action);
+      return { action_id: action.id, status: "waiting_for_seller_approval" };
+    }
     case "present_answer": {
       ctx.presented = input;
       return { ok: true };
@@ -388,6 +510,18 @@ export async function executeAction(action: Action) {
       } else if (action.type === "dispute_reply") {
         const r = await src.sendDisputeMessage(p);
         step.result = `Reply sent on ${r.disputeId}`;
+      } else if (action.type === "artisan_payout") {
+        const ws = getWorkshop();
+        const j = ws.job(p.jobId);
+        if (!j) throw new Error("That job no longer exists.");
+        if (j.status === "paid" || j.payout) throw new Error(`Already paid (payout ${j.payout?.batchId}).`);
+        const a = ws.artisan(j.artisanId)!;
+        const r = await src.sendPayout({ email: a.email, name: a.name, amount: j.pay, currency: j.currency, note: `Meena Prints: ${j.title}`, reference: j.id });
+        ws.markPaid(j.id, { batchId: r.batchId, status: r.status, paidAt: new Date().toISOString(), actionId: action.id });
+        step.result = `PayPal payout ${r.batchId} ${r.status.toLowerCase()}`;
+      } else if (action.type === "add_tracking") {
+        await src.addTracking(p);
+        step.result = "Tracking added to the PayPal transaction";
       }
       step.status = "done";
     } catch (e) {

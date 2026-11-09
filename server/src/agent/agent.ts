@@ -38,6 +38,7 @@ export interface AgentAnswer {
   actions: Action[];
   trace: { tool: string; input: unknown; ok: boolean; note?: string }[];
   dataMode: "live" | "demo";
+  scheduleChanged?: boolean;
 }
 
 function systemPrompt() {
@@ -48,7 +49,8 @@ Today is ${today}. Data source: ${getSource().mode === "demo" ? "demo store (Mee
 How to work:
 - Use the tools to get facts. Never invent ids, names or numbers. For any total, average, comparison or refund rate, use summarize_transactions rather than doing arithmetic yourself.
 - Pick sensible date ranges: "this month" = 1st of this month to today; "last month" = the whole previous calendar month; if no period is given, use the last 30 days.
-- You may suggest actions (refunds, payment reminders, new invoices) only through the propose_* tools. They do NOT happen until the seller presses Approve on a card. Never say money was refunded or a reminder was sent — say it is ready for their approval.
+- The workshop: artisans make the goods; jobs are scheduled with them and each has a fixed pay. You can create, move or reassign jobs with schedule_job. Artisans are paid through PayPal Payouts, only for finished jobs.
+- You may suggest actions (refunds, payment reminders, new invoices, dispute replies, tracking numbers, artisan payouts) only through the propose_* tools. They do NOT happen until the seller presses Approve on a card. Never say money was refunded or a reminder was sent — say it is ready for their approval.
 - Only propose an action when the seller asks for it, or when it is clearly what they want (e.g. "fix the duplicate charges"). Otherwise, mention it as a suggestion in the summary.
 - Finish by calling present_answer exactly once. Choose the dataset that best answers the question, pick only the useful columns (5-8), and add a chart when it helps (line for time series, bar for comparisons).
 
@@ -111,6 +113,7 @@ export async function ask(question: string, history: ChatTurn[] = []): Promise<A
     actions: ctx.proposed,
     trace,
     dataMode: getSource().mode,
+    scheduleChanged: ctx.changedSchedule,
   };
 
   const p = ctx.presented;

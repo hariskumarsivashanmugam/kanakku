@@ -12,6 +12,7 @@ const STARTERS = [
   "How did sales this month compare with last month?",
   "Which products get refunded the most?",
   "Invoice Juniper & Thread for 10 Kalamkari scarves at $19 each",
+  "Move Kamala's table runners to start next Monday and pay everyone whose job is done",
   "இந்த வாரம் எவ்வளவு விற்பனை ஆனது?",
   "पिछले महीने सबसे ज़्यादा किसने खरीदा?",
 ];
@@ -19,7 +20,7 @@ const STARTERS = [
 let nextId = 1;
 
 export function Assistant() {
-  const { assistant, closeAssistant, actions, upsertActions, decide, status } = useApp();
+  const { assistant, closeAssistant, actions, upsertActions, decide, status, reload } = useApp();
   const [messages, setMessages] = useState<Msg[]>([]);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState("");
@@ -59,6 +60,7 @@ export function Assistant() {
     try {
       const answer = await api.ask(q, history);
       upsertActions(answer.actions);
+      if (answer.scheduleChanged) reload();
       setMessages((m) => [...m, { id: nextId++, role: "assistant", text: answer.summary, answer }]);
     } catch (e) {
       setMessages((m) => [...m, { id: nextId++, role: "assistant", text: (e as Error).message, error: true }]);

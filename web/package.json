@@ -9,8 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "ag-charts-react": "^14.3.0",
+    "@bryntum/scheduler": "npm:@bryntum/scheduler-trial@^7.3.8",
+    "@bryntum/scheduler-react": "^7.3.8",
     "ag-charts-community": "^14.3.0",
+    "ag-charts-react": "^14.3.0",
     "ag-grid-community": "^36.3.0",
     "ag-grid-react": "^36.3.0",
     "react": "^19.1.0",

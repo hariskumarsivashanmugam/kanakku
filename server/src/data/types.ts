@@ -59,6 +59,7 @@ export interface Dispute {
   product?: string;
   orderDate?: string;
   messages?: { from: "buyer" | "seller"; text: string; at: string }[];
+  tracking?: { carrier: string; number: string };
 }
 
 export interface RefundResult {
@@ -92,4 +93,9 @@ export interface DataSource {
   remindInvoice(input: { invoiceId: string; subject?: string; note?: string }): Promise<{ invoiceId: string; status: string }>;
   createAndSendInvoice(input: NewInvoiceInput): Promise<{ invoiceId: string; number: string; status: string; link?: string }>;
   sendDisputeMessage(input: { disputeId: string; message: string }): Promise<{ disputeId: string; status: string }>;
+  /** PayPal Payouts: send money to someone's PayPal email. */
+  sendPayout(input: { email: string; name: string; amount: number; currency: string; note: string; reference: string }): Promise<{ batchId: string; status: string }>;
+  getPayoutStatus(batchId: string): Promise<string>;
+  /** PayPal Tracking: attach a shipment tracking number to a captured payment. */
+  addTracking(input: { transactionId: string; trackingNumber: string; carrier: string }): Promise<{ status: string }>;
 }

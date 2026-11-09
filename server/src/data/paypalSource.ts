@@ -118,6 +118,60 @@ export class PayPalSource implements DataSource {
     return detailed.concat(items.slice(15)).map(mapDispute);
   }
 
+  async sendPayout(input: { email: string; name: string; amount: number; currency: string; note: string; reference: string }) {
+    const res = await paypal<any>({
+      method: "POST",
+      path: "/v1/payments/payouts",
+      idempotent: true,
+      body: {
+        sender_batch_header: {
+          sender_batch_id: `${input.reference}-${Date.now()}`.slice(0, 127),
+          email_subject: "You have a payment from Meena Prints",
+          email_message: input.note.slice(0, 1000),
+        },
+        items: [
+          {
+            recipient_type: "EMAIL",
+            receiver: input.email,
+            amount: { value: input.amount.toFixed(2), currency: input.currency },
+            note: input.note.slice(0, 4000),
+            sender_item_id: input.reference.slice(0, 63),
+          },
+        ],
+      },
+    });
+    return { batchId: res.batch_header?.payout_batch_id, status: res.batch_header?.batch_status ?? "PENDING" };
+  }
+
+  /** Item status when there is one (SUCCESS, UNCLAIMED, PENDING, FAILED…), else the batch status. */
+  async getPayoutStatus(batchId: string) {
+    const res = await paypal<any>({ path: `/v1/payments/payouts/${encodeURIComponent(batchId)}` });
+    return res.items?.[0]?.transaction_status ?? res.batch_header?.batch_status ?? "PENDING";
+  }
+
+  async addTracking(input: { transactionId: string; trackingNumber: string; carrier: string }) {
+    const known = ["DHL", "FEDEX", "UPS", "USPS", "INDIA_POST", "BLUEDART", "DTDC", "ARAMEX", "ROYAL_MAIL"];
+    const carrier = input.carrier.toUpperCase().replace(/[\s-]+/g, "_");
+    const res = await paypal<any>({
+      method: "POST",
+      path: "/v1/shipping/trackers-batch",
+      body: {
+        trackers: [
+          {
+            transaction_id: input.transactionId,
+            tracking_number: input.trackingNumber,
+            status: "SHIPPED",
+            carrier: known.includes(carrier) ? carrier : "OTHER",
+            ...(known.includes(carrier) ? {} : { carrier_name_other: input.carrier }),
+          },
+        ],
+      },
+    });
+    const err = res.errors?.[0];
+    if (err) throw new Error(`PayPal didn't accept the tracking number: ${err.message ?? err.name}`);
+    return { status: "SHIPPED" };
+  }
+
   async sendDisputeMessage(input: { disputeId: string; message: string }) {
     await paypal({
       method: "POST",

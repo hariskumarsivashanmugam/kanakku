@@ -279,6 +279,38 @@ export class DemoSource implements DataSource {
     return this.data.disputes.map((d) => ({ ...d, messages: [...(d.messages ?? [])] }));
   }
 
+  async sendPayout(input: { email: string; name: string; amount: number; currency: string; note: string; reference: string }) {
+    if (!(input.amount > 0)) throw new Error("Payout amount must be more than zero.");
+    const batchId = `DEMO${Date.now().toString(36).toUpperCase()}`;
+    this.data.txns.unshift({
+      id: `7P${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 1e4)}`,
+      date: new Date().toISOString(),
+      kind: "payout",
+      status: "completed",
+      amount: -input.amount,
+      fee: 0,
+      net: -input.amount,
+      currency: input.currency,
+      customer: input.name,
+      customerEmail: input.email,
+      product: `Payout: ${input.note}`,
+    });
+    return { batchId, status: "SUCCESS" };
+  }
+
+  async getPayoutStatus() {
+    return "SUCCESS";
+  }
+
+  async addTracking(input: { transactionId: string; trackingNumber: string; carrier: string }) {
+    const d = this.data.disputes.find((x) => x.transactionId === input.transactionId);
+    if (d) {
+      d.messages = [...(d.messages ?? []), { from: "seller", text: `Tracking added: ${input.carrier} ${input.trackingNumber}`, at: new Date().toISOString() }];
+      d.tracking = { carrier: input.carrier, number: input.trackingNumber };
+    }
+    return { status: "SHIPPED" };
+  }
+
   async sendDisputeMessage(input: { disputeId: string; message: string }) {
     const d = this.data.disputes.find((x) => x.id === input.disputeId);
     if (!d) throw new Error(`No dispute found with id ${input.disputeId}`);

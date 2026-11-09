@@ -13,7 +13,7 @@ const KINDS = [
   { key: "all", label: "Everything" },
   { key: "payment", label: "Payments" },
   { key: "refund", label: "Refunds" },
-  { key: "payout", label: "Bank transfers" },
+  { key: "payout", label: "Payouts" },
 ] as const;
 
 export function Sales() {
@@ -53,7 +53,7 @@ export function Sales() {
         width: 130,
         cellRenderer: (p: { data: Txn }) => {
           const t = p.data;
-          const label = t.kind === "payment" ? (t.refunded ? "Refunded" : "Payment") : t.kind === "refund" ? "Refund" : t.kind === "payout" ? "Bank transfer" : t.kind;
+          const label = t.kind === "payment" ? (t.refunded ? "Refunded" : "Payment") : t.kind === "refund" ? "Refund" : t.kind === "payout" ? "Payout" : t.kind;
           return <span className={`pill pill-${t.refunded ? "muted" : t.kind}`}>{label}</span>;
         },
       },
@@ -84,7 +84,7 @@ export function Sales() {
       <header className="page-head">
         <div>
           <h1>Sales</h1>
-          <p className="muted">Every payment, refund and bank transfer. Tick payments to refund them.</p>
+          <p className="muted">Every payment, refund and payout. Tick payments to refund them.</p>
         </div>
         <div className="head-actions">
           <AskButton prompt="Find duplicate charges from the last two weeks and prepare refunds for them">Find duplicate charges</AskButton>

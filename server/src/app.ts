@@ -3,7 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
-import { getSource } from "./data/index.js";
+import { getSource, getWorkshop } from "./data/index.js";
 import { DemoSource } from "./data/demoSource.js";
 import type { Transaction } from "./data/types.js";
 import { PayPalError } from "./paypal/client.js";
@@ -12,6 +12,7 @@ import { briefFacts } from "./agent/analytics.js";
 import { buildOverview } from "./agent/insights.js";
 import { draftDisputeReply, draftInvoiceFromText } from "./agent/drafts.js";
 import { clearActions, getAction, listActions } from "./agent/store.js";
+import { getAutopilot, resetAutopilot, runAutopilot, updateRule, updateSchedule } from "./agent/autopilot.js";
 import { executeAction, PROPOSE_TOOLS, runTool, type ToolContext } from "./agent/tools.js";
 
 const DAY = 86_400_000;
@@ -101,6 +102,93 @@ export function createApp() {
     res.json(d.sort((a, b) => (a.daysLeftToRespond ?? 999) - (b.daysLeftToRespond ?? 999)));
   });
 
+  // ---------- workshop (artisans, jobs, payouts) ----------
+
+  app.get("/api/workshop", async (_req, res) => {
+    const ws = getWorkshop();
+    const src = getSource();
+    // Refresh payouts that haven't settled yet (e.g. UNCLAIMED until the artisan accepts).
+    const open = ws.get().jobs.filter((j) => j.payout && !["SUCCESS", "FAILED", "RETURNED", "BLOCKED", "REFUNDED", "REVERSED"].includes(j.payout.status));
+    await Promise.all(
+      open.slice(0, 10).map(async (j) => {
+        try {
+          ws.setPayoutStatus(j.id, await src.getPayoutStatus(j.payout!.batchId));
+        } catch {
+          /* keep the last known status */
+        }
+      }),
+    );
+    const w = ws.get();
+    const monthStart = new Date().toISOString().slice(0, 8) + "01";
+    res.json({
+      ...w,
+      summary: {
+        owed: w.jobs.filter((j) => j.status === "done").reduce((s, j) => s + j.pay, 0),
+        owedCount: w.jobs.filter((j) => j.status === "done").length,
+        inProgress: w.jobs.filter((j) => j.status === "in_progress").length,
+        paidThisMonth: w.jobs.filter((j) => j.payout && j.payout.paidAt >= monthStart).reduce((s, j) => s + j.pay, 0),
+        currency: "USD",
+      },
+    });
+  });
+
+  app.post("/api/workshop/jobs", (req, res) => {
+    const b = req.body ?? {};
+    try {
+      res.json(
+        getWorkshop().createJob({
+          artisanId: String(b.artisanId ?? ""),
+          title: String(b.title ?? "").trim() || "New job",
+          customer: b.customer ? String(b.customer) : undefined,
+          start: String(b.start ?? ""),
+          end: String(b.end ?? ""),
+          pay: Number(b.pay ?? 0),
+        }),
+      );
+    } catch (e) {
+      res.status(400).json({ error: (e as Error).message });
+    }
+  });
+
+  app.patch("/api/workshop/jobs/:id", (req, res) => {
+    const b = req.body ?? {};
+    const patch: Record<string, unknown> = {};
+    for (const k of ["start", "end", "artisanId", "status", "title"]) if (typeof b[k] === "string") patch[k] = b[k];
+    if (typeof b.pay === "number") patch.pay = b.pay;
+    try {
+      res.json(getWorkshop().updateJob(req.params.id, patch));
+    } catch (e) {
+      res.status(400).json({ error: (e as Error).message });
+    }
+  });
+
+  // ---------- autopilot ----------
+
+  app.get("/api/autopilot", (_req, res) => {
+    res.json(getAutopilot());
+  });
+
+  app.patch("/api/autopilot/rules/:id", (req, res) => {
+    try {
+      res.json(updateRule(req.params.id, req.body ?? {}));
+    } catch (e) {
+      res.status(400).json({ error: (e as Error).message });
+    }
+  });
+
+  app.patch("/api/autopilot/schedule", (req, res) => {
+    res.json(updateSchedule(req.body ?? {}));
+  });
+
+  app.post("/api/autopilot/run", async (req, res) => {
+    const trigger = ["manual", "schedule", "webhook", "external"].includes(req.body?.trigger) ? req.body.trigger : "manual";
+    try {
+      res.json(await runAutopilot(trigger));
+    } catch (e) {
+      res.status(409).json({ error: (e as Error).message });
+    }
+  });
+
   // ---------- assistant ----------
 
   app.post("/api/ask", async (req, res) => {
@@ -166,6 +254,8 @@ export function createApp() {
     const src = getSource();
     if (!(src instanceof DemoSource)) return void res.status(400).json({ error: "Reset only works with demo data." });
     src.reset();
+    getWorkshop().reset();
+    resetAutopilot();
     clearActions();
     res.json({ ok: true });
   });

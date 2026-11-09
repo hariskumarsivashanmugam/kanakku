@@ -1,8 +1,10 @@
 import { createApp } from "./app.js";
 import { config } from "./config.js";
 import { getSource } from "./data/index.js";
+import { restartTimer } from "./agent/autopilot.js";
 
 const app = createApp();
+restartTimer();
 app.listen(config.port, () => {
   const mode = getSource().mode;
   console.log(`Kanakku server on http://localhost:${config.port}`);

@@ -4,7 +4,7 @@ export interface ActionStep {
   result?: string;
 }
 
-export type ActionType = "refund" | "invoice_reminder" | "create_invoice" | "dispute_reply";
+export type ActionType = "refund" | "invoice_reminder" | "create_invoice" | "dispute_reply" | "artisan_payout" | "add_tracking";
 
 export interface Action {
   id: string;
@@ -26,6 +26,7 @@ export interface Answer {
   actions: Action[];
   trace: { tool: string; ok: boolean; note?: string }[];
   dataMode: "live" | "demo";
+  scheduleChanged?: boolean;
 }
 
 export interface Status {
@@ -130,6 +131,35 @@ export interface Dispute {
   product?: string;
   orderDate?: string;
   messages?: { from: "buyer" | "seller"; text: string; at: string }[];
+  tracking?: { carrier: string; number: string };
+}
+
+export interface Artisan {
+  id: string;
+  name: string;
+  craft: string;
+  place: string;
+  email: string;
+}
+
+export interface Job {
+  id: string;
+  artisanId: string;
+  title: string;
+  customer?: string;
+  start: string;
+  end: string;
+  pay: number;
+  currency: string;
+  status: "planned" | "in_progress" | "done" | "paid";
+  completedAt?: string;
+  payout?: { batchId: string; status: string; paidAt: string };
+}
+
+export interface Workshop {
+  artisans: Artisan[];
+  jobs: Job[];
+  summary: { owed: number; owedCount: number; inProgress: number; paidThisMonth: number; currency: string };
 }
 
 export interface InvoiceDraft {
@@ -142,7 +172,32 @@ export interface InvoiceDraft {
   missing: string[];
 }
 
-export type ProposeTool = "propose_refunds" | "propose_invoice_reminders" | "propose_new_invoice" | "propose_dispute_reply";
+export interface AutopilotRule {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  mode: "auto" | "ask";
+  modes: ("auto" | "ask")[];
+  params: Record<string, number>;
+  paramLabels: Record<string, string>;
+}
+
+export interface AutopilotRun {
+  id: string;
+  at: string;
+  trigger: "manual" | "schedule" | "webhook" | "external";
+  results: { ruleId: string; ruleName: string; outcome: "did" | "asked" | "nothing" | "held" | "error"; summary: string; actionIds: string[] }[];
+}
+
+export interface Autopilot {
+  rules: AutopilotRule[];
+  runs: AutopilotRun[];
+  schedule: { enabled: boolean; intervalMinutes: number };
+  running: boolean;
+}
+
+export type ProposeTool = "propose_refunds" | "propose_invoice_reminders" | "propose_new_invoice" | "propose_dispute_reply" | "propose_artisan_payouts" | "propose_tracking";
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -166,6 +221,15 @@ export const api = {
   ask: (question: string, history: { role: "user" | "assistant"; text: string }[]) => call<Answer>("/api/ask", post({ question, history })),
   invoiceDraft: (text: string) => call<InvoiceDraft>("/api/ai/invoice-draft", post({ text })),
   disputeReply: (disputeId: string, note?: string) => call<{ message: string }>("/api/ai/dispute-reply", post({ disputeId, note })),
+  workshop: () => call<Workshop>("/api/workshop"),
+  createJob: (job: { artisanId: string; title: string; customer?: string; start: string; end: string; pay: number }) => call<Job>("/api/workshop/jobs", post(job)),
+  updateJob: (id: string, patch: Partial<Pick<Job, "start" | "end" | "artisanId" | "status" | "title" | "pay">>) =>
+    call<Job>(`/api/workshop/jobs/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  autopilot: () => call<Autopilot>("/api/autopilot"),
+  updateRule: (id: string, patch: Partial<Pick<AutopilotRule, "enabled" | "mode" | "params">>) =>
+    call<AutopilotRule>(`/api/autopilot/rules/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  updateSchedule: (patch: Partial<Autopilot["schedule"]>) => call<Autopilot["schedule"]>("/api/autopilot/schedule", { method: "PATCH", body: JSON.stringify(patch) }),
+  runAutopilot: () => call<AutopilotRun>("/api/autopilot/run", post({ trigger: "manual" })),
   actions: () => call<Action[]>("/api/actions"),
   propose: (tool: ProposeTool, input: unknown, source: string) => call<Action>("/api/actions/propose", post({ tool, input, source })),
   approve: (id: string) => call<Action>(`/api/actions/${id}/approve`, { method: "POST" }),

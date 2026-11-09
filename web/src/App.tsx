@@ -9,6 +9,8 @@ import { Sales } from "./pages/Sales";
 import { Invoices } from "./pages/Invoices";
 import { Disputes } from "./pages/Disputes";
 import { Activity } from "./pages/Activity";
+import { Workshop } from "./pages/Workshop";
+import { Autopilot } from "./pages/Autopilot";
 
 export default function App() {
   return (
@@ -23,6 +25,8 @@ const NAV: { page: Page; label: string; icon: ReactNode }[] = [
   { page: "sales", label: "Sales", icon: <Icon d="M3 16h14 M5 13V9 M9 13V5 M13 13v-6" /> },
   { page: "invoices", label: "Invoices", icon: <Icon d="M5 3h10v14l-2.5-1.5L10 17l-2.5-1.5L5 17z M8 7h4 M8 10h4" /> },
   { page: "disputes", label: "Disputes", icon: <Icon d="M10 3 3 16h14z M10 8v4 M10 14v.01" /> },
+  { page: "workshop", label: "Workshop", icon: <Icon d="M3 7h14v9H3z M7 7V4h6v3 M3 11h14" /> },
+  { page: "autopilot", label: "Autopilot", icon: <Icon d="M10 2.5v3 M10 14.5v3 M2.5 10h3 M14.5 10h3 M10 7a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" /> },
   { page: "activity", label: "Activity", icon: <Icon d="M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14z M10 6v4l3 2" /> },
 ];
 
@@ -40,10 +44,12 @@ function Shell() {
   const [approvalsOpen, setApprovalsOpen] = useState(false);
   const invoices = useData(api.invoices);
   const disputes = useData(api.disputes);
+  const workshop = useData(api.workshop);
 
   const overdue = (invoices.data ?? []).filter((i) => i.daysOverdue > 0 && ["SENT", "UNPAID", "PARTIALLY_PAID"].includes(i.status)).length;
   const dueSoon = (disputes.data ?? []).filter((d) => !["RESOLVED", "CLOSED"].includes(d.status) && (d.daysLeftToRespond ?? 99) <= 5).length;
-  const badges: Partial<Record<Page, number>> = { invoices: overdue, disputes: dueSoon };
+  const owedJobs = (workshop.data?.jobs ?? []).filter((j) => j.status === "done").length;
+  const badges: Partial<Record<Page, number>> = { invoices: overdue, disputes: dueSoon, workshop: owedJobs };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -123,6 +129,8 @@ function Shell() {
           {page === "sales" && <Sales />}
           {page === "invoices" && <Invoices arg={arg} />}
           {page === "disputes" && <Disputes arg={arg} />}
+          {page === "workshop" && <Workshop />}
+          {page === "autopilot" && <Autopilot />}
           {page === "activity" && <Activity />}
         </main>
       </div>

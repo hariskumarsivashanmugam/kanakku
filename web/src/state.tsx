@@ -50,6 +50,8 @@ const doneText: Record<Action["type"], string> = {
   invoice_reminder: "Reminders sent",
   create_invoice: "Invoice sent",
   dispute_reply: "Reply sent to the buyer",
+  artisan_payout: "Payout sent through PayPal",
+  add_tracking: "Tracking added to PayPal",
 };
 
 export function AppProvider({ children }: { children: ReactNode }) {

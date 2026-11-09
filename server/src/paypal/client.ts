@@ -87,6 +87,8 @@ export function featureFor(path: string): string {
   if (path.startsWith("/v2/invoicing")) return "Invoicing";
   if (path.startsWith("/v1/customer/disputes")) return "Disputes";
   if (path.startsWith("/v2/payments") || path.startsWith("/v2/checkout")) return "Accept payments";
+  if (path.startsWith("/v1/payments/payouts")) return "Payouts";
+  if (path.startsWith("/v1/shipping")) return "Shipment tracking";
   return "the required";
 }
 
