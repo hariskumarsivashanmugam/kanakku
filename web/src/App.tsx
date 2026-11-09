@@ -1,318 +1,138 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, type Action, type Answer, type Brief, type Status } from "./api";
-import { ResultView } from "./ResultView";
-import { ActionCard } from "./ActionCard";
-import { RichText } from "./RichText";
-
-type Msg = { id: number; role: "user" | "assistant"; text: string; answer?: Answer; error?: boolean };
-
-const LANGS = [
-  { code: "English", label: "English" },
-  { code: "Tamil", label: "தமிழ்" },
-  { code: "Hindi", label: "हिन्दी" },
-];
-
-const STARTERS = [
-  "How did sales this month compare with last month?",
-  "Which products get refunded the most?",
-  "Who still owes me money on invoices?",
-  "இந்த வாரம் எவ்வளவு விற்பனை ஆனது?",
-];
-
-let nextId = 1;
+import { useEffect, useState, type ReactNode } from "react";
+import { api } from "./api";
+import { AppProvider, LANGS, useApp, useData } from "./state";
+import { navigate, useRoute, type Page } from "./router";
+import { Assistant } from "./Assistant";
+import { Approvals, ConfirmDialog, SparkIcon, Toasts } from "./components";
+import { Overview } from "./pages/Overview";
+import { Sales } from "./pages/Sales";
+import { Invoices } from "./pages/Invoices";
+import { Disputes } from "./pages/Disputes";
+import { Activity } from "./pages/Activity";
 
 export default function App() {
-  const [status, setStatus] = useState<Status | null>(null);
-  const [lang, setLang] = useState(() => {
-    try {
-      return localStorage.getItem("kanakku.lang") ?? "English";
-    } catch {
-      return "English";
-    }
-  });
-  const [brief, setBrief] = useState<Brief | null>(null);
-  const [briefError, setBriefError] = useState("");
-  const [messages, setMessages] = useState<Msg[]>([]);
-  const [selected, setSelected] = useState<number | null>(null);
-  const [actions, setActions] = useState<Record<string, Action>>({});
-  const [busy, setBusy] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [logOpen, setLogOpen] = useState(false);
-  const threadEnd = useRef<HTMLDivElement>(null);
+  return (
+    <AppProvider>
+      <Shell />
+    </AppProvider>
+  );
+}
 
-  const loadBrief = useCallback(() => {
-    setBrief(null);
-    setBriefError("");
-    api.brief(lang).then(setBrief, (e: Error) => setBriefError(e.message));
-  }, [lang]);
+const NAV: { page: Page; label: string; icon: ReactNode }[] = [
+  { page: "overview", label: "Overview", icon: <Icon d="M3 10.5 10 4l7 6.5V17H3z M8 17v-4h4v4" /> },
+  { page: "sales", label: "Sales", icon: <Icon d="M3 16h14 M5 13V9 M9 13V5 M13 13v-6" /> },
+  { page: "invoices", label: "Invoices", icon: <Icon d="M5 3h10v14l-2.5-1.5L10 17l-2.5-1.5L5 17z M8 7h4 M8 10h4" /> },
+  { page: "disputes", label: "Disputes", icon: <Icon d="M10 3 3 16h14z M10 8v4 M10 14v.01" /> },
+  { page: "activity", label: "Activity", icon: <Icon d="M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14z M10 6v4l3 2" /> },
+];
 
-  useEffect(() => {
-    api.status().then(setStatus, () => setStatus(null));
-  }, []);
+function Icon({ d }: { d: string }) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={d} />
+    </svg>
+  );
+}
 
-  useEffect(() => {
-    try {
-      localStorage.setItem("kanakku.lang", lang);
-    } catch {
-      /* storage unavailable */
-    }
-    loadBrief();
-  }, [lang, loadBrief]);
+function Shell() {
+  const { page, arg } = useRoute();
+  const { status, lang, setLang, pending, openAssistant, assistant } = useApp();
+  const [approvalsOpen, setApprovalsOpen] = useState(false);
+  const invoices = useData(api.invoices);
+  const disputes = useData(api.disputes);
+
+  const overdue = (invoices.data ?? []).filter((i) => i.daysOverdue > 0 && ["SENT", "UNPAID", "PARTIALLY_PAID"].includes(i.status)).length;
+  const dueSoon = (disputes.data ?? []).filter((d) => !["RESOLVED", "CLOSED"].includes(d.status) && (d.daysLeftToRespond ?? 99) <= 5).length;
+  const badges: Partial<Record<Page, number>> = { invoices: overdue, disputes: dueSoon };
 
   useEffect(() => {
-    threadEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, busy]);
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        openAssistant();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [openAssistant]);
 
-  async function send(question: string) {
-    const q = question.trim();
-    if (!q || busy) return;
-    const history = messages.filter((m) => !m.error).map((m) => ({ role: m.role, text: m.answer?.summary ?? m.text }));
-    setMessages((m) => [...m, { id: nextId++, role: "user", text: q }]);
-    setDraft("");
-    setBusy(true);
-    try {
-      const answer = await api.ask(q, history);
-      const id = nextId++;
-      setMessages((m) => [...m, { id, role: "assistant", text: answer.summary, answer }]);
-      if (answer.table || answer.chart) setSelected(id);
-      if (answer.actions.length) setActions((a) => ({ ...a, ...Object.fromEntries(answer.actions.map((x) => [x.id, x])) }));
-    } catch (e) {
-      setMessages((m) => [...m, { id: nextId++, role: "assistant", text: (e as Error).message, error: true }]);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function decide(id: string, approve: boolean) {
-    setActions((a) => ({ ...a, [id]: { ...a[id], status: "running" } }));
-    try {
-      const updated = approve ? await api.approve(id) : await api.reject(id);
-      setActions((a) => ({ ...a, [id]: updated }));
-      if (approve) loadBrief();
-    } catch (e) {
-      setActions((a) => ({ ...a, [id]: { ...a[id], status: "failed", steps: a[id].steps.map((s) => ({ ...s, result: (e as Error).message })) } }));
-    }
-  }
-
-  async function resetDemo() {
-    await api.resetDemo();
-    setMessages([]);
-    setActions({});
-    setSelected(null);
-    loadBrief();
-  }
-
-  const shown = useMemo(() => {
-    const withData = messages.filter((m) => m.answer?.table || m.answer?.chart);
-    return messages.find((m) => m.id === selected) ?? withData[withData.length - 1];
-  }, [messages, selected]);
-
-  const log = Object.values(actions)
-    .filter((a) => a.status !== "pending")
-    .sort((a, b) => (b.decidedAt ?? "").localeCompare(a.decidedAt ?? ""));
-
-  const quick = brief ? quickAsks(brief, lang) : [];
+  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
+    <div className={`shell${assistant.open ? " has-assistant" : ""}`}>
+      <a href="#main" className="skip">
+        Skip to content
+      </a>
+      <nav className="sidebar" aria-label="Main">
+        <a className="brand" href="#/overview" aria-label="Kanakku home">
           <span className="wordmark">Kanakku</span>
-          <span className="tagline">Your PayPal account, explained and handled</span>
-        </div>
-        <div className="topbar-tools">
+          <span className="brand-sub">Meena Prints</span>
+        </a>
+        <ul>
+          {NAV.map((n) => (
+            <li key={n.page}>
+              <a href={`#/${n.page}`} aria-current={page === n.page ? "page" : undefined}>
+                {n.icon}
+                <span>{n.label}</span>
+                {badges[n.page] ? (
+                  <span className="badge" aria-label={`${badges[n.page]} need attention`}>
+                    {badges[n.page]}
+                  </span>
+                ) : null}
+              </a>
+            </li>
+          ))}
+        </ul>
+        <div className="sidebar-foot">
           {status && (
-            <span className={`source source-${status.dataMode}`} title={status.dataMode === "demo" ? "Built-in demo store for Meena Prints" : "Connected to your PayPal sandbox"}>
+            <p className={`source source-${status.dataMode}`}>
+              <span className="dot" aria-hidden />
               {status.dataMode === "demo" ? "Demo store" : "PayPal sandbox"}
-            </span>
-          )}
-          <label className="lang">
-            <span className="sr-only">Language</span>
-            <select value={lang} onChange={(e) => setLang(e.target.value)}>
-              {LANGS.map((l) => (
-                <option key={l.code} value={l.code}>
-                  {l.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button className="ghost" onClick={() => setLogOpen((o) => !o)} aria-expanded={logOpen}>
-            Activity{log.length ? ` (${log.length})` : ""}
-          </button>
-        </div>
-      </header>
-
-      <section className="ledger" aria-labelledby="brief-title">
-        <div className="ledger-inner">
-          <h1 id="brief-title">
-            Today, {new Date().toLocaleDateString(lang === "Tamil" ? "ta-IN" : lang === "Hindi" ? "hi-IN" : "en-IN", { day: "numeric", month: "long" })}
-          </h1>
-          {briefError ? (
-            <p className="brief-text muted">Couldn't load today's summary: {briefError}</p>
-          ) : brief ? (
-            <>
-              {brief.text && (
-                <p className="brief-text">
-                  <RichText text={brief.text} />
-                </p>
-              )}
-              {brief.warnings?.map((w) => (
-                <p key={w} className="brief-warning" role="status">
-                  {w}
-                </p>
-              ))}
-            </>
-          ) : (
-            <p className="brief-text loading-line" aria-busy="true">
-              Reading your account…
             </p>
           )}
-          {quick.length > 0 && (
-            <div className="chips">
-              {quick.map((q) => (
-                <button key={q.label} className="chip chip-urgent" onClick={() => send(q.ask)} disabled={busy}>
-                  {q.label}
-                </button>
-              ))}
-            </div>
-          )}
+          <p className="powered">Payments by PayPal. AI by Claude.</p>
         </div>
-      </section>
+      </nav>
 
-      {logOpen && (
-        <section className="activity" aria-label="Activity">
-          <div className="activity-head">
-            <h2>What Kanakku has done</h2>
-            {status?.dataMode === "demo" && (
-              <button className="ghost small" onClick={resetDemo}>
-                Reset demo store
-              </button>
-            )}
-          </div>
-          {log.length === 0 ? (
-            <p className="muted">Nothing yet. Approved and declined actions are recorded here.</p>
-          ) : (
-            <ol className="activity-list">
-              {log.map((a) => (
-                <li key={a.id}>
-                  <span className={`dot dot-${a.status}`} aria-hidden />
-                  <div>
-                    <strong>{a.title}</strong> — {statusWord(a.status)}
-                    {a.decidedAt && <span className="muted"> at {new Date(a.decidedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>}
-                    <div className="muted small-text">Asked: “{a.requestedBy}”</div>
-                  </div>
-                </li>
-              ))}
-            </ol>
-          )}
-        </section>
-      )}
-
-      <main className="workspace">
-        <section className="thread" aria-label="Conversation">
-          <div className="messages">
-            {messages.length === 0 && (
-              <div className="empty">
-                <p>Ask about sales, refunds, invoices or disputes, in any language. Kanakku will look it up in your PayPal account.</p>
-                <div className="chips">
-                  {STARTERS.map((s) => (
-                    <button key={s} className="chip" onClick={() => send(s)} disabled={busy}>
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {messages.map((m) => (
-              <div key={m.id} className={`msg msg-${m.role}${m.error ? " msg-error" : ""}${shown?.id === m.id ? " msg-shown" : ""}`}>
-                {m.role === "assistant" && !m.error ? <RichText text={m.text} /> : <span>{m.text}</span>}
-                {m.answer && (m.answer.table || m.answer.chart) && (
-                  <button className="link small" onClick={() => setSelected(m.id)} aria-pressed={shown?.id === m.id}>
-                    {shown?.id === m.id ? "Showing in the table" : "Show the table"}
-                  </button>
-                )}
-                {m.answer?.actions.map((a) => actions[a.id] && <ActionCard key={a.id} action={actions[a.id]} onDecide={decide} />)}
-              </div>
-            ))}
-            {busy && (
-              <div className="msg msg-assistant thinking" aria-live="polite">
-                Looking through your account…
-              </div>
-            )}
-            <div ref={threadEnd} />
-          </div>
-
-          <form
-            className="ask"
-            onSubmit={(e) => {
-              e.preventDefault();
-              send(draft);
-            }}
-          >
-            <label htmlFor="ask-input" className="sr-only">
-              Ask Kanakku
-            </label>
-            <textarea
-              id="ask-input"
-              rows={2}
-              value={draft}
-              placeholder="Ask anything, e.g. “Refund the duplicate charges”"
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  send(draft);
-                }
-              }}
-            />
-            <button type="submit" className="primary" disabled={busy || !draft.trim()}>
-              Ask
+      <div className="main-col">
+        <header className="topbar">
+          <button className="ask-bar" onClick={() => openAssistant()}>
+            <SparkIcon />
+            <span className="ask-bar-text">Ask about your sales, refunds, invoices or disputes…</span>
+            <kbd>{isMac ? "⌘" : "Ctrl"} K</kbd>
+          </button>
+          <div className="topbar-tools">
+            <button className={`ghost approvals-btn${pending.length ? " has-pending" : ""}`} onClick={() => setApprovalsOpen(true)}>
+              Approvals{pending.length ? <span className="badge">{pending.length}</span> : null}
             </button>
-          </form>
-          {status && !status.aiReady && (
-            <p className="warn">Add ANTHROPIC_API_KEY to your .env file and restart the server to ask questions.</p>
-          )}
-        </section>
+            <label className="lang">
+              <span className="sr-only">Language</span>
+              <select value={lang} onChange={(e) => setLang(e.target.value)}>
+                {LANGS.map((l) => (
+                  <option key={l.code} value={l.code}>
+                    {l.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </header>
 
-        <section className="results" aria-label="Results">
-          {shown?.answer ? (
-            <ResultView answer={shown.answer} />
-          ) : (
-            <div className="results-empty">
-              <p>Tables and charts for your answers appear here. You can sort, filter and resize every column.</p>
-            </div>
-          )}
-        </section>
-      </main>
+        <main id="main" tabIndex={-1}>
+          {page === "overview" && <Overview />}
+          {page === "sales" && <Sales />}
+          {page === "invoices" && <Invoices arg={arg} />}
+          {page === "disputes" && <Disputes arg={arg} />}
+          {page === "activity" && <Activity />}
+        </main>
+      </div>
+
+      <Assistant />
+      <Approvals open={approvalsOpen} onClose={() => setApprovalsOpen(false)} />
+      <ConfirmDialog />
+      <Toasts />
     </div>
   );
 }
 
-function statusWord(s: Action["status"]) {
-  return { done: "done", partly_done: "partly done", failed: "failed", rejected: "declined", running: "in progress", pending: "waiting" }[s];
-}
-
-function quickAsks(b: Brief, lang: string) {
-  const out: { label: string; ask: string }[] = [];
-  const ta = lang === "Tamil";
-  const hi = lang === "Hindi";
-  if (b.facts.urgent_disputes.length) {
-    out.push({
-      label: ta ? "அவசர புகாரைப் பார்" : hi ? "ज़रूरी विवाद देखें" : "Look at the urgent dispute",
-      ask: ta ? "பதில் அளிக்க வேண்டிய புகார்களைக் காட்டு" : hi ? "जिन विवादों का जवाब देना है, वे दिखाओ" : "Show me the disputes I need to respond to, most urgent first",
-    });
-  }
-  if (b.facts.possible_duplicate_charges.length) {
-    out.push({
-      label: ta ? "இரட்டைக் கட்டணங்களைச் சரிசெய்" : hi ? "डुप्लिकेट चार्ज ठीक करें" : "Fix duplicate charges",
-      ask: ta ? "கடந்த இரண்டு வாரங்களில் உள்ள இரட்டைக் கட்டணங்களைக் கண்டுபிடித்து, திருப்பிச் செலுத்தத் தயார் செய்" : hi ? "पिछले दो हफ़्तों के डुप्लिकेट चार्ज ढूँढो और उनका रिफ़ंड तैयार करो" : "Find duplicate charges from the last two weeks and prepare refunds for them",
-    });
-  }
-  if (b.facts.overdue_invoices.count) {
-    out.push({
-      label: ta ? "நிலுவை இன்வாய்ஸ்களுக்கு நினைவூட்டு" : hi ? "बकाया इनवॉइस का रिमाइंडर भेजें" : "Chase overdue invoices",
-      ask: ta ? "காலாவதியான இன்வாய்ஸ்களைக் காட்டி, எல்லோருக்கும் நினைவூட்டல் தயார் செய்" : hi ? "बकाया इनवॉइस दिखाओ और सबको रिमाइंडर तैयार करो" : "Show overdue invoices and prepare reminders for all of them",
-    });
-  }
-  return out;
-}
+export { navigate };

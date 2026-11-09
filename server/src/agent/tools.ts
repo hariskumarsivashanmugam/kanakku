@@ -26,7 +26,7 @@ const schemas = {
   }),
   summarize_transactions: z.object({
     ...dateRange,
-    group_by: z.enum(["day", "week", "month", "customer", "product", "kind"]),
+    group_by: z.enum(["day", "week", "month", "weekday", "customer", "product", "kind"]),
   }),
   find_duplicate_charges: z.object({
     ...dateRange,
@@ -65,6 +65,11 @@ const schemas = {
     due_in_days: z.number().int().positive().default(14),
     reason: z.string(),
   }),
+  propose_dispute_reply: z.object({
+    dispute_id: z.string(),
+    message: z.string().min(10).max(2000).describe("The reply to the buyer, in English, polite and specific"),
+    reason: z.string(),
+  }),
   present_answer: z.object({
     summary: z.string().describe("Short answer for the seller in THEIR language, 1-4 sentences, markdown allowed"),
     dataset_id: z.string().optional().describe("Dataset to show in the grid"),
@@ -89,7 +94,7 @@ const descriptions: Record<ToolName, string> = {
   search_transactions:
     "List individual transactions (payments, refunds, bank payouts) in a date range, with optional filters. Returns a dataset_id and a preview.",
   summarize_transactions:
-    "Exact totals grouped by day, week, month, customer, product or kind: orders, gross_sales, refunds, refund_rate_pct, fees, net. Use this for any totals or comparisons instead of adding numbers yourself.",
+    "Exact totals grouped by day, week, month, weekday, customer, product or kind: orders, gross_sales, refunds, refund_rate_pct, fees, net. Use this for any totals or comparisons instead of adding numbers yourself.",
   find_duplicate_charges: "Find likely accidental duplicate charges: same buyer, same amount and product, minutes apart.",
   list_invoices: "List invoices. status 'overdue' = sent but unpaid past the due date.",
   list_disputes: "List PayPal disputes/claims with reason, amount and days left to respond.",
@@ -98,6 +103,8 @@ const descriptions: Record<ToolName, string> = {
   propose_invoice_reminders:
     "Prepare payment reminders for open invoices, for the seller to approve. Does NOT send anything by itself.",
   propose_new_invoice: "Prepare a new invoice to create and send, for the seller to approve. Does NOT send anything by itself.",
+  propose_dispute_reply:
+    "Prepare a reply to the buyer on a dispute, for the seller to approve. Does NOT send anything by itself.",
   present_answer:
     "ALWAYS call this last, exactly once, to show the answer: a short summary plus optionally a dataset in the grid and a chart.",
 };
@@ -171,6 +178,8 @@ function txnRow(t: Transaction) {
 function preview<T>(rows: T[], n = 25) {
   return { count: rows.length, rows: rows.slice(0, n), truncated: rows.length > n };
 }
+
+export const PROPOSE_TOOLS = ["propose_refunds", "propose_invoice_reminders", "propose_new_invoice", "propose_dispute_reply"] as const;
 
 export async function runTool(name: string, rawInput: unknown, ctx: ToolContext): Promise<unknown> {
   if (!(name in schemas)) throw new Error(`Unknown tool ${name}`);
@@ -252,7 +261,9 @@ export async function runTool(name: string, rawInput: unknown, ctx: ToolContext)
           currency: x.currency,
           days_left_to_respond: x.daysLeftToRespond ?? "",
           transaction_id: x.transactionId ?? "",
+          product: x.product ?? "",
           opened: x.createdAt?.slice(0, 10),
+          buyer_says: x.messages?.filter((m) => m.from === "buyer").at(-1)?.text ?? "",
         }));
       const ds = saveDataset("Disputes", rows);
       return { dataset_id: ds.id, ...preview(rows) };
@@ -336,6 +347,20 @@ export async function runTool(name: string, rawInput: unknown, ctx: ToolContext)
       ctx.proposed.push(action);
       return { action_id: action.id, status: "waiting_for_seller_approval" };
     }
+    case "propose_dispute_reply": {
+      const d = (await src.listDisputes()).find((x) => x.id === input.dispute_id);
+      if (!d) throw new Error(`Dispute ${input.dispute_id} not found. Use list_disputes first.`);
+      if (!isOpenDispute(d)) throw new Error(`Dispute ${d.id} is ${d.status}; it can't take a reply.`);
+      const action = addAction({
+        type: "dispute_reply",
+        title: `Reply to ${d.customer}'s dispute`,
+        reason: input.reason,
+        steps: [{ label: `Send this reply on dispute ${d.id} (${d.currency} ${d.amount.toFixed(2)}): “${input.message}”`, payload: { disputeId: d.id, message: input.message } }],
+        requestedBy: ctx.question,
+      });
+      ctx.proposed.push(action);
+      return { action_id: action.id, status: "waiting_for_seller_approval" };
+    }
     case "present_answer": {
       ctx.presented = input;
       return { ok: true };
@@ -360,6 +385,9 @@ export async function executeAction(action: Action) {
       } else if (action.type === "create_invoice") {
         const r = await src.createAndSendInvoice(p);
         step.result = `Invoice ${r.number} sent`;
+      } else if (action.type === "dispute_reply") {
+        const r = await src.sendDisputeMessage(p);
+        step.result = `Reply sent on ${r.disputeId}`;
       }
       step.status = "done";
     } catch (e) {

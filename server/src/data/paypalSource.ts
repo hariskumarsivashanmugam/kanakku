@@ -65,6 +65,16 @@ export class PayPalSource implements DataSource {
     return detailed.concat(items.slice(15)).map(mapDispute);
   }
 
+  async sendDisputeMessage(input: { disputeId: string; message: string }) {
+    await paypal({
+      method: "POST",
+      path: `/v1/customer/disputes/${encodeURIComponent(input.disputeId)}/send-message`,
+      body: { message: input.message.slice(0, 2000) },
+      idempotent: true,
+    });
+    return { disputeId: input.disputeId, status: "MESSAGE_SENT" };
+  }
+
   async refundPayment(input: { transactionId: string; amount?: number; currency?: string; note?: string }) {
     const body: Record<string, unknown> = {};
     if (input.amount !== undefined) {
@@ -221,6 +231,13 @@ function mapDispute(d: any): Dispute {
     transactionId: tx?.seller_transaction_id,
     responseDueDate: due,
     daysLeftToRespond: due ? daysBetween(todayISO(), due.slice(0, 10)) : undefined,
+    product: tx?.items?.map((i: any) => i.item_name).filter(Boolean).join(", ") || undefined,
+    orderDate: tx?.seller_transaction_id ? tx?.create_time : undefined,
+    messages: (d.messages ?? []).map((m: any) => ({
+      from: m.posted_by === "SELLER" ? ("seller" as const) : ("buyer" as const),
+      text: m.content ?? "",
+      at: m.time_posted ?? "",
+    })),
   };
 }
 

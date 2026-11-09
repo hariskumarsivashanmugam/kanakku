@@ -199,3 +199,64 @@ test("brief still loads when one PayPal permission is missing", async () => {
     setSource(original);
   }
 });
+
+const forced = (input: unknown) =>
+  setLLM({
+    async create(params: any) {
+      return { content: [{ type: "tool_use", id: "f", name: params.tool_choice.name, input, caller: { type: "direct" } }] as any, stop_reason: "tool_use" };
+    },
+  });
+
+test("overview: exact KPIs, insights and attention items", async () => {
+  const body = await (await fetch(`${base}/api/overview`)).json();
+  assert.equal(body.series.length, 60);
+  assert.ok(body.kpis.owed > 0 && body.kpis.overdueCount >= 3);
+  assert.equal(body.kpis.disputesDueSoon, 1);
+  assert.ok(body.insights.some((i: any) => i.id === "refund-outlier" && i.title.startsWith("Indigo cushion cover set")));
+  assert.ok(body.topProducts.length === 6);
+  assert.deepEqual(body.unavailable, []);
+});
+
+test("buttons go through the same checks and approval as the assistant", async () => {
+  assert.equal((await post("/api/actions/propose", { tool: "delete_everything", input: {} })).status, 400);
+  const bad = await post("/api/actions/propose", { tool: "propose_refunds", input: { refunds: [{ transaction_id: "NOPE" }], reason: "x" } });
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /not a payment/);
+
+  const inv = (await (await fetch(`${base}/api/invoices`)).json()).find((i: any) => i.status === "SENT");
+  const res = await post("/api/actions/propose", { tool: "propose_invoice_reminders", input: { invoice_ids: [inv.id], reason: "Due" }, source: "Invoices page" });
+  const action = await res.json();
+  assert.equal(action.status, "pending");
+  assert.equal(action.requestedBy, "Invoices page");
+  const done = await (await post(`/api/actions/${action.id}/approve`)).json();
+  assert.equal(done.status, "done");
+  const after = (await (await fetch(`${base}/api/invoices`)).json()).find((i: any) => i.id === inv.id);
+  assert.ok(after.lastReminder, "reminder recorded on the invoice");
+});
+
+test("AI invoice draft from a pasted message", async () => {
+  forced({ customer_name: "Casa Lino", customer_email: "", currency: "USD", items: [{ name: "Ajrakh stole", quantity: 12, unit_amount: 32 }], due_in_days: 14, note: "", missing: ["customer email"] });
+  const draft = await (await post("/api/ai/invoice-draft", { text: "Please send 12 Ajrakh stoles at $32 to Casa Lino" })).json();
+  assert.equal(draft.items[0].quantity, 12);
+  assert.deepEqual(draft.missing, ["customer email"]);
+  assert.equal((await post("/api/ai/invoice-draft", { text: "hi" })).status, 400);
+});
+
+test("dispute reply: AI draft, approval, then the message is on the case", async () => {
+  const dispute = (await (await fetch(`${base}/api/disputes`)).json())[0];
+  forced({ message: "Hello, I'm sorry your order hasn't arrived. Tracking: [tracking number]." });
+  const { message } = await (await post("/api/ai/dispute-reply", { disputeId: dispute.id })).json();
+  assert.match(message, /tracking/);
+  const action = await (await post("/api/actions/propose", { tool: "propose_dispute_reply", input: { dispute_id: dispute.id, message, reason: "Reply" } })).json();
+  assert.equal(action.type, "dispute_reply");
+  assert.equal((await (await post(`/api/actions/${action.id}/approve`)).json()).status, "done");
+  const after = (await (await fetch(`${base}/api/disputes`)).json()).find((d: any) => d.id === dispute.id);
+  assert.equal(after.status, "UNDER_REVIEW");
+  assert.equal(after.messages.at(-1).from, "seller");
+});
+
+test("transactions endpoint marks refunded payments", async () => {
+  const rows = await (await fetch(`${base}/api/transactions?days=30`)).json();
+  assert.ok(rows.some((r: any) => r.kind === "payment" && r.refunded));
+  assert.ok(rows.every((r: any) => r.kind !== "refund" || !r.refunded));
+});

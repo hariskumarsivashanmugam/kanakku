@@ -5,10 +5,58 @@ import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { getSource } from "./data/index.js";
 import { DemoSource } from "./data/demoSource.js";
+import type { Transaction } from "./data/types.js";
+import { PayPalError } from "./paypal/client.js";
 import { ask, writeBrief, type ChatTurn } from "./agent/agent.js";
 import { briefFacts } from "./agent/analytics.js";
+import { buildOverview } from "./agent/insights.js";
+import { draftDisputeReply, draftInvoiceFromText } from "./agent/drafts.js";
 import { clearActions, getAction, listActions } from "./agent/store.js";
-import { executeAction } from "./agent/tools.js";
+import { executeAction, PROPOSE_TOOLS, runTool, type ToolContext } from "./agent/tools.js";
+
+const DAY = 86_400_000;
+
+/** Loads sales, invoices and disputes separately so one missing PayPal permission doesn't hide the rest. */
+async function loadAll(days: number) {
+  const src = getSource();
+  const now = new Date();
+  const [txns, invoices, disputes] = await Promise.allSettled([
+    src.listTransactions({ start: new Date(now.getTime() - days * DAY).toISOString(), end: now.toISOString() }),
+    src.listInvoices(),
+    src.listDisputes(),
+  ]);
+  const parts = [
+    { name: "sales", r: txns },
+    { name: "invoices", r: invoices },
+    { name: "disputes", r: disputes },
+  ];
+  const value = <T,>(r: PromiseSettledResult<T[]>) => (r.status === "fulfilled" ? r.value : []);
+  return {
+    now,
+    txns: value(txns),
+    invoices: value(invoices),
+    disputes: value(disputes),
+    unavailable: parts.filter((p) => p.r.status === "rejected").map((p) => p.name),
+    warnings: [...new Set(parts.flatMap((p) => (p.r.status === "rejected" ? [(p.r.reason as Error).message] : [])))],
+  };
+}
+
+function txnRow(t: Transaction) {
+  return {
+    date: t.date,
+    id: t.id,
+    kind: t.kind,
+    customer: t.customer,
+    email: t.customerEmail,
+    product: t.product,
+    amount: t.amount,
+    fee: t.fee,
+    net: t.net,
+    currency: t.currency,
+    status: t.status,
+    refundOf: t.refundOf,
+  };
+}
 
 export function createApp() {
   const app = express();
@@ -18,30 +66,42 @@ export function createApp() {
     res.json({ dataMode: getSource().mode, aiReady: Boolean(config.anthropicKey), model: config.model });
   });
 
+  // ---------- screens ----------
+
+  app.get("/api/overview", async (_req, res) => {
+    const d = await loadAll(120);
+    const overview = buildOverview(d);
+    const attention = briefFacts(d);
+    res.json({ ...overview, attention, unavailable: d.unavailable, warnings: d.warnings });
+  });
+
   app.get("/api/brief", async (req, res) => {
     const lang = String(req.query.lang ?? "English").slice(0, 40);
-    const src = getSource();
-    const now = new Date();
-    // Load each part separately so one missing PayPal permission doesn't hide everything else.
-    const [txns, invoices, disputes] = await Promise.allSettled([
-      src.listTransactions({ start: new Date(now.getTime() - 75 * 86_400_000).toISOString(), end: now.toISOString() }),
-      src.listInvoices(),
-      src.listDisputes(),
-    ]);
-    const parts = [
-      { name: "sales", r: txns },
-      { name: "invoices", r: invoices },
-      { name: "disputes", r: disputes },
-    ];
-    const unavailable = parts.filter((p) => p.r.status === "rejected").map((p) => p.name);
-    const warnings = [
-      ...new Set(parts.flatMap((p) => (p.r.status === "rejected" ? [(p.r.reason as Error).message] : []))),
-    ];
-    const value = <T,>(r: PromiseSettledResult<T[]>) => (r.status === "fulfilled" ? r.value : []);
-    const facts = { ...briefFacts({ txns: value(txns), invoices: value(invoices), disputes: value(disputes), now }), unavailable };
-    const text = unavailable.length === parts.length ? "" : await writeBrief(facts, lang);
-    res.json({ facts, text, warnings });
+    const d = await loadAll(75);
+    const facts = { ...briefFacts(d), unavailable: d.unavailable };
+    const text = d.unavailable.length === 3 ? "" : await writeBrief(facts, lang);
+    res.json({ facts, text, warnings: d.warnings });
   });
+
+  app.get("/api/transactions", async (req, res) => {
+    const days = Math.min(365, Math.max(1, Number(req.query.days ?? 30) || 30));
+    const now = Date.now();
+    const txns = await getSource().listTransactions({ start: new Date(now - days * DAY).toISOString(), end: new Date(now).toISOString() });
+    const refunded = new Set(txns.filter((t) => t.kind === "refund" && t.refundOf).map((t) => t.refundOf));
+    res.json(txns.map((t) => ({ ...txnRow(t), refunded: t.kind === "payment" && refunded.has(t.id) })));
+  });
+
+  app.get("/api/invoices", async (_req, res) => {
+    const inv = await getSource().listInvoices();
+    res.json(inv.sort((a, b) => b.issueDate.localeCompare(a.issueDate)));
+  });
+
+  app.get("/api/disputes", async (_req, res) => {
+    const d = await getSource().listDisputes();
+    res.json(d.sort((a, b) => (a.daysLeftToRespond ?? 999) - (b.daysLeftToRespond ?? 999)));
+  });
+
+  // ---------- assistant ----------
 
   app.post("/api/ask", async (req, res) => {
     const question = String(req.body?.question ?? "").trim();
@@ -55,8 +115,35 @@ export function createApp() {
     res.json(await ask(question, history));
   });
 
+  app.post("/api/ai/invoice-draft", async (req, res) => {
+    const text = String(req.body?.text ?? "").trim();
+    if (text.length < 10) return void res.status(400).json({ error: "Paste the message with the order details first." });
+    res.json(await draftInvoiceFromText(text));
+  });
+
+  app.post("/api/ai/dispute-reply", async (req, res) => {
+    const d = (await getSource().listDisputes()).find((x) => x.id === req.body?.disputeId);
+    if (!d) return void res.status(404).json({ error: "Dispute not found." });
+    res.json({ message: await draftDisputeReply(d, typeof req.body?.note === "string" ? req.body.note.slice(0, 500) : undefined) });
+  });
+
+  // ---------- actions (always need approval) ----------
+
   app.get("/api/actions", (_req, res) => {
     res.json(listActions());
+  });
+
+  /** Buttons in the UI create the same pending actions the assistant does, through the same checks. */
+  app.post("/api/actions/propose", async (req, res) => {
+    const tool = String(req.body?.tool ?? "");
+    if (!(PROPOSE_TOOLS as readonly string[]).includes(tool)) return void res.status(400).json({ error: "Unknown action." });
+    const ctx: ToolContext = { question: String(req.body?.source ?? "From the app").slice(0, 200), proposed: [] };
+    try {
+      await runTool(tool, req.body?.input, ctx);
+    } catch (e) {
+      return void res.status(400).json({ error: (e as Error).message });
+    }
+    res.json(ctx.proposed[0]);
   });
 
   app.post("/api/actions/:id/approve", async (req, res) => {
@@ -91,8 +178,9 @@ export function createApp() {
   }
 
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-    console.error(err);
-    res.status(500).json({ error: err.message || "Something went wrong." });
+    const status = err instanceof PayPalError && err.status >= 400 && err.status < 500 ? err.status : 500;
+    if (status === 500) console.error(err);
+    res.status(status).json({ error: err.message || "Something went wrong." });
   });
 
   return app;

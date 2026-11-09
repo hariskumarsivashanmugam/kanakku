@@ -1,7 +1,7 @@
 import type { Dispute, Invoice, Transaction } from "../data/types.js";
 import { round2 } from "../data/util.js";
 
-export type GroupBy = "day" | "week" | "month" | "customer" | "product" | "kind";
+export type GroupBy = "day" | "week" | "month" | "weekday" | "customer" | "product" | "kind";
 
 export interface SummaryRow {
   group: string;
@@ -30,6 +30,8 @@ function groupKey(t: Transaction, by: GroupBy): string {
     }
     case "month":
       return d.slice(0, 7);
+    case "weekday":
+      return ["0 Sun", "1 Mon", "2 Tue", "3 Wed", "4 Thu", "5 Fri", "6 Sat"][new Date(t.date).getUTCDay()];
     case "customer":
       return t.customer;
     case "product":
@@ -72,7 +74,7 @@ export function summarize(txns: Transaction[], by: GroupBy): SummaryRow[] {
     net: round2(r.net),
     refund_rate_pct: r.gross_sales ? round2((r.refunds / r.gross_sales) * 100) : 0,
   }));
-  const timeBased = by === "day" || by === "week" || by === "month";
+  const timeBased = by === "day" || by === "week" || by === "month" || by === "weekday";
   return rows.sort((a, b) => (timeBased ? a.group.localeCompare(b.group) : b.gross_sales - a.gross_sales));
 }
 

@@ -25,7 +25,7 @@ export function getDataset(id: string) {
 
 // ---------------- Actions that need the seller's approval ----------------
 
-export type ActionType = "refund" | "invoice_reminder" | "create_invoice";
+export type ActionType = "refund" | "invoice_reminder" | "create_invoice" | "dispute_reply";
 export type ActionStatus = "pending" | "running" | "done" | "partly_done" | "failed" | "rejected";
 
 export interface ActionStep {

@@ -56,6 +56,9 @@ export interface Dispute {
   transactionId?: string;
   responseDueDate?: string; // ISO
   daysLeftToRespond?: number;
+  product?: string;
+  orderDate?: string;
+  messages?: { from: "buyer" | "seller"; text: string; at: string }[];
 }
 
 export interface RefundResult {
@@ -88,4 +91,5 @@ export interface DataSource {
   }): Promise<RefundResult>;
   remindInvoice(input: { invoiceId: string; subject?: string; note?: string }): Promise<{ invoiceId: string; status: string }>;
   createAndSendInvoice(input: NewInvoiceInput): Promise<{ invoiceId: string; number: string; status: string; link?: string }>;
+  sendDisputeMessage(input: { disputeId: string; message: string }): Promise<{ disputeId: string; status: string }>;
 }

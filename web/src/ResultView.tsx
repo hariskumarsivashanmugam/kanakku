@@ -1,53 +1,22 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { AgGridReact } from "ag-grid-react";
-import { themeQuartz, type ColDef } from "ag-grid-community";
+import type { ColDef } from "ag-grid-community";
 import { AgCharts } from "ag-charts-react";
 import type { AgChartOptions } from "ag-charts-community";
 import type { Answer } from "./api";
 import { RichText } from "./RichText";
+import { useDarkMode, useGridTheme, palettes } from "./theme";
 
 const MONEY_FIELDS = /amount|sales|refunds|fees|^fee$|^net$|total|due/;
 
-function useDarkMode() {
-  const q = "(prefers-color-scheme: dark)";
-  const [dark, setDark] = useState(() => window.matchMedia?.(q).matches ?? false);
-  useEffect(() => {
-    const mq = window.matchMedia?.(q);
-    if (!mq) return;
-    const on = (e: MediaQueryListEvent) => setDark(e.matches);
-    mq.addEventListener("change", on);
-    return () => mq.removeEventListener("change", on);
-  }, []);
-  return dark;
-}
-
-const palette = {
-  light: { ink: "#1F2A55", muted: "#5B6177", line: "#DCDFEA", surface: "#FFFFFF", head: "#EEF0F6", fills: ["#2D3E8C", "#C2412F", "#D99A1E"] },
-  dark: { ink: "#E6E8F2", muted: "#A3A8BE", line: "#2E3658", surface: "#1A2142", head: "#222A50", fills: ["#8C9CF0", "#F07A63", "#F2C14E"] },
-};
-
-export function ResultView({ answer }: { answer: Answer }) {
+export function ResultView({ answer, compact }: { answer: Answer; compact?: boolean }) {
   const dark = useDarkMode();
-  const p = dark ? palette.dark : palette.light;
+  const p = useMemo(() => {
+    const base = dark ? palettes.dark : palettes.light;
+    return { ...base, fills: [base.indigo, base.madder, base.turmeric] };
+  }, [dark]);
 
-  const theme = useMemo(
-    () =>
-      themeQuartz.withParams({
-        fontFamily: "inherit",
-        fontSize: 14,
-        foregroundColor: p.ink,
-        backgroundColor: p.surface,
-        headerBackgroundColor: p.head,
-        headerTextColor: p.ink,
-        borderColor: p.line,
-        accentColor: p.fills[0],
-        oddRowBackgroundColor: "transparent",
-        rowHoverColor: dark ? "#252E5A" : "#F4F5FA",
-        wrapperBorderRadius: 10,
-        headerFontWeight: 600,
-      }),
-    [dark, p],
-  );
+  const theme = useGridTheme();
 
   const t = answer.table;
   const columnDefs = useMemo<ColDef[]>(() => {
@@ -83,12 +52,20 @@ export function ResultView({ answer }: { answer: Answer }) {
     const c = answer.chart;
     if (!c || !t) return null;
     const timeLike = /date|day|week|month/.test(c.x) || t.rows.every((r) => /^\d{4}-\d{2}/.test(String(r[c.x])));
-    const data = c.type === "line" || timeLike ? t.rows : t.rows.slice(0, 12);
+    const rows = c.type === "line" || timeLike ? t.rows : t.rows.slice(0, 12);
+    // Friendlier labels for ISO dates and "0 Sun"-style weekday keys.
+    const data = rows.map((r) => {
+      const v = String(r[c.x] ?? "");
+      if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return { ...r, [c.x]: new Date(v + "T00:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" }) };
+      if (/^\d{4}-\d{2}$/.test(v)) return { ...r, [c.x]: new Date(v + "-01T00:00:00Z").toLocaleDateString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" }) };
+      if (/^\d [A-Z][a-z]{2}$/.test(v)) return { ...r, [c.x]: v.slice(2) };
+      return r;
+    });
     const header = (f: string) => t.columns.find((x) => x.field === f)?.header ?? f.replace(/_/g, " ");
     const base = {
       data,
       background: { fill: "transparent" },
-      title: { text: c.title, color: p.ink, fontFamily: "Anek Latin, sans-serif", fontSize: 16, fontWeight: 600 as const },
+      title: { text: c.title, color: p.ink, fontFamily: "Anek Latin, sans-serif", fontSize: compact ? 14 : 16, fontWeight: 600 as const },
       legend: { enabled: c.y.length > 1 || c.type === "pie", item: { label: { color: p.muted } } },
       theme: {
         params: { fontFamily: "Anek Latin, Anek Tamil, Anek Devanagari, sans-serif" },
@@ -129,7 +106,7 @@ export function ResultView({ answer }: { answer: Answer }) {
   }, [answer.chart, t, p]);
 
   return (
-    <div className="result">
+    <div className={`result${compact ? " result-compact" : ""}`}>
       <div className="result-summary">
         <RichText text={answer.summary} />
       </div>
@@ -146,7 +123,7 @@ export function ResultView({ answer }: { answer: Answer }) {
             </span>
             <span className="muted">From {answer.dataMode === "demo" ? "the demo store" : "your PayPal sandbox"}</span>
           </div>
-          <div className="grid-wrap" style={{ height: Math.min(520, 56 + Math.max(3, t.rows.length) * 42) }}>
+          <div className="grid-wrap" style={{ height: Math.min(compact ? 340 : 520, 56 + Math.max(3, t.rows.length) * 44) }}>
             <AgGridReact theme={theme} rowData={t.rows} columnDefs={columnDefs} animateRows={false} suppressCellFocus={false} />
           </div>
         </div>

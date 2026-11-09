@@ -24,6 +24,15 @@ const CUSTOMERS = [
   "Ava Thompson", "Arjun Mehta", "Nora Lindqvist", "Samuel Okafor", "Ella Novak", "Jack Wilson",
 ];
 
+// Most buyers order once or twice; a handful of loyal customers come back often.
+const FIRST = ["Olivia", "James", "Amelia", "Henry", "Lily", "Thomas", "Ruby", "Max", "Freya", "Felix", "Ines", "Pablo",
+  "Yuki", "Kenji", "Anna", "Jonas", "Clara", "Elias", "Maya", "Rahul", "Ananya", "Kavya", "Sara", "David", "Laura",
+  "Marco", "Giulia", "Nina", "Tom", "Alice"];
+const LAST = ["Taylor", "Moreau", "Schneider", "Hughes", "Bianchi", "Walsh", "Sato", "Andersen", "Ferreira", "Jansen",
+  "Kowalski", "Murphy", "Iyer", "Nair", "Varga", "Clarke", "Weber", "Laurent", "Romano", "Evans", "Park", "Silva",
+  "Patel", "Novak", "Berg", "Russo", "Hall", "Kaur", "Dubois", "Lopez"];
+const LOYAL = CUSTOMERS.slice(0, 6);
+
 const BOUTIQUES = [
   { name: "Juniper & Thread", email: "orders@juniperthread.example.com" },
   { name: "Casa Lino", email: "hola@casalino.example.com" },
@@ -71,7 +80,10 @@ export function buildDemoData(now = new Date()) {
     for (let i = 0; i < orders; i++) {
       const p = PRODUCTS[Math.floor(r() * PRODUCTS.length)];
       const qty = r() < 0.8 ? 1 : 2;
-      const customer = CUSTOMERS[Math.floor(r() * CUSTOMERS.length)];
+      const customer =
+        r() < 0.14
+          ? LOYAL[Math.floor(r() * LOYAL.length)]
+          : `${FIRST[Math.floor(r() * FIRST.length)]} ${LAST[Math.floor(r() * LAST.length)]}`;
       const ts = new Date(day);
       ts.setUTCHours(Math.floor(r() * 24), Math.floor(r() * 60), Math.floor(r() * 60));
       if (ts > now) continue;
@@ -194,11 +206,37 @@ export function buildDemoData(now = new Date()) {
   });
 
   const payments = txns.filter((t) => t.kind === "payment");
-  const pick = (n: number) => payments[n];
+  // Each dispute is about an order placed 10–20 days before the case was opened, from a different customer.
+  const used = new Set<string>();
+  const pick = (openedDaysAgo: number, product?: string) => {
+    const from = now.getTime() - (openedDaysAgo + 20) * 86_400_000;
+    const to = now.getTime() - (openedDaysAgo + 10) * 86_400_000;
+    const t =
+      payments.find((x) => {
+        const ms = Date.parse(x.date);
+        return ms >= from && ms <= to && !used.has(x.customer) && !LOYAL.includes(x.customer) && (!product || x.product.startsWith(product));
+      }) ?? payments[used.size * 7 + 6];
+    used.add(t.customer);
+    return t;
+  };
   const disputes: Dispute[] = [
-    { tx: pick(6), reason: "MERCHANDISE_OR_SERVICE_NOT_RECEIVED", status: "WAITING_FOR_SELLER_RESPONSE", created: 8, dueIn: 2 },
-    { tx: pick(25), reason: "MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED", status: "WAITING_FOR_SELLER_RESPONSE", created: 5, dueIn: 9 },
-    { tx: pick(70), reason: "UNAUTHORISED", status: "RESOLVED", created: 30, dueIn: undefined },
+    {
+      tx: pick(8, "Handloom"),
+      reason: "MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
+      status: "WAITING_FOR_SELLER_RESPONSE",
+      created: 8,
+      dueIn: 2 as number | undefined,
+      message: "It has been over two weeks and my order still hasn't arrived. The tracking page hasn't updated since it left India. I'd like a refund please.",
+    },
+    {
+      tx: pick(5, "Indigo cushion"),
+      reason: "MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED",
+      status: "WAITING_FOR_SELLER_RESPONSE",
+      created: 5,
+      dueIn: 9,
+      message: "The colour ran the first time I washed it and stained my other clothes. The listing said colourfast natural dyes.",
+    },
+    { tx: pick(30, "Ajrakh"), reason: "UNAUTHORISED", status: "RESOLVED", created: 30, dueIn: undefined, message: "I don't recognise this charge." },
   ].map((d, i) => {
     const due = d.dueIn === undefined ? undefined : addDays(now.toISOString(), d.dueIn);
     return {
@@ -212,6 +250,9 @@ export function buildDemoData(now = new Date()) {
       transactionId: d.tx.id,
       responseDueDate: due,
       daysLeftToRespond: d.dueIn,
+      product: d.tx.product,
+      orderDate: d.tx.date,
+      messages: [{ from: "buyer" as const, text: d.message, at: addDays(now.toISOString(), -d.created) }],
     };
   });
 
@@ -235,7 +276,15 @@ export class DemoSource implements DataSource {
   }
 
   async listDisputes() {
-    return this.data.disputes.map((d) => ({ ...d }));
+    return this.data.disputes.map((d) => ({ ...d, messages: [...(d.messages ?? [])] }));
+  }
+
+  async sendDisputeMessage(input: { disputeId: string; message: string }) {
+    const d = this.data.disputes.find((x) => x.id === input.disputeId);
+    if (!d) throw new Error(`No dispute found with id ${input.disputeId}`);
+    d.messages = [...(d.messages ?? []), { from: "seller", text: input.message, at: new Date().toISOString() }];
+    d.status = "UNDER_REVIEW";
+    return { disputeId: d.id, status: "MESSAGE_SENT" };
   }
 
   async refundPayment(input: { transactionId: string; amount?: number; currency?: string; note?: string }) {
