@@ -14,6 +14,7 @@
  *   npm run seed -- --payments=40        fewer card payments (default 60)
  *   npm run seed -- --only=invoices      just invoices (or: payments)
  *   npm run seed -- --buyer-checkout     the dispute walkthrough
+ *   npm run seed -- --whoami             which sandbox business account your keys belong to
  *
  * Sandbox only: the script refuses to run against api-m.paypal.com.
  */
@@ -174,6 +175,33 @@ function explainCardError(e: unknown) {
   return msg;
 }
 
+/** Which sandbox business account do these keys belong to? An unpaid order shows its payee. */
+async function whoAmI(): Promise<{ email?: string; merchantId?: string } | null> {
+  try {
+    const created = await paypal<any>({
+      method: "POST",
+      path: "/v2/checkout/orders",
+      idempotent: true,
+      body: { intent: "CAPTURE", purchase_units: [{ amount: usd(1) }] },
+    });
+    const order = await paypal<any>({ path: `/v2/checkout/orders/${created.id}` });
+    const payee = order.purchase_units?.[0]?.payee ?? {};
+    return { email: payee.email_address, merchantId: payee.merchant_id };
+  } catch {
+    return null;
+  }
+}
+
+async function printAccount() {
+  const me = await whoAmI();
+  if (me?.email || me?.merchantId) {
+    console.log(`  Your PAYPAL_CLIENT_ID belongs to the sandbox business account: ${me.email ?? "?"} (merchant id ${me.merchantId ?? "?"})`);
+    console.log("  Check it matches the United States business account under developer.paypal.com → Sandbox accounts.");
+  } else {
+    console.log("  Couldn't look up which sandbox account these keys belong to.");
+  }
+}
+
 async function seedPayments() {
   console.log(`\nCard payments (${PAYMENTS}) using test card ending ${CARD.slice(-4)}…`);
   const plan = Array.from({ length: PAYMENTS }, () => ({ product: weighted(), buyer: customer(), qty: rnd() < 0.15 ? 2 : 1 }));
@@ -184,6 +212,7 @@ async function seedPayments() {
     first = await cardPayment(plan[0].product, plan[0].buyer, plan[0].qty);
   } catch (e) {
     console.error("  ✗ First card payment failed:\n    " + explainCardError(e));
+    await printAccount();
     return [];
   }
   const rest = await inPool(plan.slice(1), 4, (p) => cardPayment(p.product, p.buyer, p.qty));
@@ -383,16 +412,20 @@ async function main() {
     }
   }
 
+  if (args.has("whoami")) return printAccount();
   if (BUYER_CHECKOUT) return buyerCheckout();
-  if (ONLY !== "invoices") await seedPayments();
+  const paid = ONLY !== "invoices" ? await seedPayments() : null;
   if (ONLY !== "payments") await seedInvoices();
 
-  console.log(`
-Done. In Kanakku (DATA_MODE=auto or live), refresh the page:
-  • Payments, refunds and duplicate charges show on Overview and Sales right away. Kanakku reads these
-    orders live from PayPal's Orders API (their ids are kept in ${ledgerPath}).
-  • Invoices show on the Invoices screen.
-  • Once Transaction search is enabled on your app, the rest of your PayPal history is merged in too.
+  console.log(`\nDone. In Kanakku (DATA_MODE=auto or live), refresh the page:`);
+  if (paid?.length) {
+    console.log(`  • ${paid.length} payments, their refunds and the duplicate charges show on Overview and Sales right away.
+    Kanakku reads these orders live from PayPal's Orders API (their ids are kept in ${ledgerPath}).`);
+  } else if (paid) {
+    console.log("  • No payments were created, so Overview and Sales stay empty. Fix the card error above and run: npm run seed -- --only=payments");
+  }
+  if (ONLY !== "payments") console.log("  • Invoices show on the Invoices screen.");
+  console.log(`  • Once Transaction search is enabled on your app, the rest of your PayPal history is merged in too.
   • For a real dispute, run: npm run seed -- --buyer-checkout`);
 }
 
