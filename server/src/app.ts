@@ -22,14 +22,25 @@ export function createApp() {
     const lang = String(req.query.lang ?? "English").slice(0, 40);
     const src = getSource();
     const now = new Date();
-    const [txns, invoices, disputes] = await Promise.all([
+    // Load each part separately so one missing PayPal permission doesn't hide everything else.
+    const [txns, invoices, disputes] = await Promise.allSettled([
       src.listTransactions({ start: new Date(now.getTime() - 75 * 86_400_000).toISOString(), end: now.toISOString() }),
       src.listInvoices(),
-      src.listDisputes().catch(() => []), // disputes may be unavailable on some sandbox apps
+      src.listDisputes(),
     ]);
-    const facts = briefFacts({ txns, invoices, disputes, now });
-    const text = await writeBrief(facts, lang);
-    res.json({ facts, text });
+    const parts = [
+      { name: "sales", r: txns },
+      { name: "invoices", r: invoices },
+      { name: "disputes", r: disputes },
+    ];
+    const unavailable = parts.filter((p) => p.r.status === "rejected").map((p) => p.name);
+    const warnings = [
+      ...new Set(parts.flatMap((p) => (p.r.status === "rejected" ? [(p.r.reason as Error).message] : []))),
+    ];
+    const value = <T,>(r: PromiseSettledResult<T[]>) => (r.status === "fulfilled" ? r.value : []);
+    const facts = { ...briefFacts({ txns: value(txns), invoices: value(invoices), disputes: value(disputes), now }), unavailable };
+    const text = unavailable.length === parts.length ? "" : await writeBrief(facts, lang);
+    res.json({ facts, text, warnings });
   });
 
   app.post("/api/ask", async (req, res) => {

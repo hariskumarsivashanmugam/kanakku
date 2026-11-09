@@ -127,7 +127,7 @@ export async function ask(question: string, history: ChatTurn[] = []): Promise<A
 }
 
 /** Turns the exact brief facts into a few friendly sentences in the seller's language. */
-export async function writeBrief(facts: BriefFacts, language: string): Promise<string> {
+export async function writeBrief(facts: BriefFacts & { unavailable?: string[] }, language: string): Promise<string> {
   let model: LLM;
   try {
     model = getLLM();
@@ -138,7 +138,7 @@ export async function writeBrief(facts: BriefFacts, language: string): Promise<s
     model: config.model,
     max_tokens: 400,
     system:
-      "You write a 2-4 sentence morning brief for a small online seller. Use ONLY the facts given, keep every number exact, put the most urgent item first (disputes close to their deadline, then duplicate charges, then overdue invoices), then one line on sales. No greeting fluff, no markdown headings. Bold at most two key numbers.",
+      "You write a 2-4 sentence morning brief for a small online seller. Use ONLY the facts given, keep every number exact, put the most urgent item first (disputes close to their deadline, then duplicate charges, then overdue invoices), then one line on sales. No greeting fluff, no markdown headings. Bold at most two key numbers. Anything listed in \"unavailable\" could not be loaded: do not mention it or treat it as zero.",
     messages: [{ role: "user", content: `Language: ${language}\nFacts (JSON):\n${JSON.stringify(facts)}` }],
   });
   const text = res.content
@@ -149,8 +149,9 @@ export async function writeBrief(facts: BriefFacts, language: string): Promise<s
   return text || templateBrief(facts);
 }
 
-export function templateBrief(f: BriefFacts): string {
+export function templateBrief(f: BriefFacts & { unavailable?: string[] }): string {
   const parts: string[] = [];
+  const missing = new Set(f.unavailable ?? []);
   const c = f.currency;
   if (f.urgent_disputes.length) {
     const d = f.urgent_disputes[0];
@@ -162,8 +163,9 @@ export function templateBrief(f: BriefFacts): string {
   if (f.overdue_invoices.count) {
     parts.push(`**${c} ${f.overdue_invoices.total_due.toLocaleString("en-US")}** is overdue across ${f.overdue_invoices.count} invoices.`);
   }
-  if (f.change_pct !== null) {
+  if (f.change_pct !== null && !missing.has("sales")) {
     parts.push(`Sales this month: ${c} ${f.month_to_date_sales.toLocaleString("en-US")} (${f.change_pct >= 0 ? "+" : ""}${f.change_pct}% vs the same days last month).`);
   }
+  if (parts.length === 0 && missing.size) return "";
   return parts.join(" ") || "All clear today: no urgent disputes, duplicate charges or overdue invoices.";
 }

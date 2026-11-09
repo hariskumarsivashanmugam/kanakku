@@ -150,9 +150,18 @@ export default function App() {
           {briefError ? (
             <p className="brief-text muted">Couldn't load today's summary: {briefError}</p>
           ) : brief ? (
-            <p className="brief-text">
-              <RichText text={brief.text} />
-            </p>
+            <>
+              {brief.text && (
+                <p className="brief-text">
+                  <RichText text={brief.text} />
+                </p>
+              )}
+              {brief.warnings?.map((w) => (
+                <p key={w} className="brief-warning" role="status">
+                  {w}
+                </p>
+              ))}
+            </>
           ) : (
             <p className="brief-text loading-line" aria-busy="true">
               Reading your account…

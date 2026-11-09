@@ -67,10 +67,27 @@ export async function paypal<T = any>(req: PayPalRequest): Promise<T> {
   const data = text ? safeJson(text) : {};
   if (!res.ok) {
     const d = data as { message?: string; details?: { issue?: string; description?: string }[] };
+    if (res.status === 403) {
+      const feature = featureFor(req.path);
+      throw new PayPalError(
+        `Your PayPal app doesn't have ${feature} permission. In developer.paypal.com → Apps & Credentials → your sandbox app → Features, turn on "${feature}", save, then restart the Kanakku server.`,
+        403,
+        data,
+      );
+    }
     const detail = d.details?.map((x) => x.description || x.issue).filter(Boolean).join("; ");
     throw new PayPalError(`PayPal ${res.status}: ${d.message ?? res.statusText}${detail ? ` (${detail})` : ""}`, res.status, data);
   }
   return data as T;
+}
+
+/** The PayPal app feature (as named in the developer dashboard) an API path needs. */
+export function featureFor(path: string): string {
+  if (path.startsWith("/v1/reporting")) return "Transaction search";
+  if (path.startsWith("/v2/invoicing")) return "Invoicing";
+  if (path.startsWith("/v1/customer/disputes")) return "Disputes";
+  if (path.startsWith("/v2/payments") || path.startsWith("/v2/checkout")) return "Accept payments";
+  return "the required";
 }
 
 function safeJson(text: string): unknown {

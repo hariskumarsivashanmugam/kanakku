@@ -174,3 +174,28 @@ test("brief endpoint returns exact facts and text", async () => {
   assert.equal(body.text, "Brief text");
   assert.ok(body.facts.overdue_invoices.count >= 3);
 });
+
+test("brief still loads when one PayPal permission is missing", async () => {
+  const { setSource, getSource } = await import("../src/data/index.js");
+  const { DemoSource } = await import("../src/data/demoSource.js");
+  const { PayPalError, featureFor } = await import("../src/paypal/client.js");
+  assert.equal(featureFor("/v1/reporting/transactions"), "Transaction search");
+  const original = getSource();
+  const partial = new DemoSource();
+  partial.listTransactions = async () => {
+    throw new PayPalError("Your PayPal app doesn't have Transaction search permission.", 403);
+  };
+  setSource(partial);
+  try {
+    setLLM({ async create() { return { content: [{ type: "text", text: "Invoices brief", citations: null }] as any, stop_reason: "end_turn" }; } });
+    const res = await fetch(`${base}/api/brief`);
+    const body = await res.json();
+    assert.equal(res.status, 200);
+    assert.deepEqual(body.facts.unavailable, ["sales"]);
+    assert.match(body.warnings[0], /Transaction search/);
+    assert.ok(body.facts.overdue_invoices.count >= 3, "invoices still counted");
+    assert.equal(body.text, "Invoices brief");
+  } finally {
+    setSource(original);
+  }
+});

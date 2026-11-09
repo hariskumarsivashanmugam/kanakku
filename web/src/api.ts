@@ -34,6 +34,7 @@ export interface Status {
 
 export interface Brief {
   text: string;
+  warnings?: string[];
   facts: {
     urgent_disputes: { id: string; customer: string; amount: number; days_left: number }[];
     overdue_invoices: { count: number; total_due: number };

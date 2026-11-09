@@ -85,6 +85,8 @@ For development with hot reload, run `npm run dev` and open http://localhost:517
 - **With PayPal sandbox keys:** Kanakku reads and acts on your sandbox account. Run `npm run seed` once to create boutique invoices and, if you set `SEED_TEST_CARD_NUMBER` to a [sandbox test card](https://developer.paypal.com/tools/sandbox/card-testing/), captured payments including a duplicate charge. New sandbox payments can take a few hours to appear in Transaction Search; invoices appear right away.
 - Force either with `DATA_MODE=demo` or `DATA_MODE=live`.
 
+**PayPal permissions.** New sandbox apps don't have every API turned on. In developer.paypal.com → Apps & Credentials → your sandbox app → **Features**, turn on **Transaction search**, **Invoicing** and **Disputes**, save, then restart the server so it gets a fresh token. If one is missing, Kanakku still loads what it can and names the missing feature on screen.
+
 ### Tests
 
 ```bash
