@@ -246,6 +246,7 @@ export const api = {
   updateSchedule: (patch: Partial<Autopilot["schedule"]>) => call<Autopilot["schedule"]>("/api/autopilot/schedule", { method: "PATCH", body: JSON.stringify(patch) }),
   runAutopilot: () => call<AutopilotRun>("/api/autopilot/run", post({ trigger: "manual" })),
   actions: () => call<Action[]>("/api/actions"),
+  recentEvents: () => call<{ id: string; at: string; type: string; title: string; detail: string; page?: string }[]>("/api/events/recent"),
   propose: (tool: ProposeTool, input: unknown, source: string) => call<Action>("/api/actions/propose", post({ tool, input, source })),
   approve: (id: string) => call<Action>(`/api/actions/${id}/approve`, { method: "POST" }),
   reject: (id: string) => call<Action>(`/api/actions/${id}/reject`, { method: "POST" }),

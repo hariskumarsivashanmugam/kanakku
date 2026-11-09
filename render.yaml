@@ -1,0 +1,74 @@
+# Render Blueprint for Kanakku: render.com → New → Blueprint → pick this repo.
+# You'll be asked for the values marked sync: false. See README → "Deploy on Render".
+services:
+  # The app: web UI + API + PayPal webhook receiver
+  - type: web
+    name: kanakku
+    runtime: node
+    plan: starter
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/status
+    disk:
+      name: kanakku-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: KANAKKU_DIR
+        value: /var/data
+      - key: DATA_MODE
+        value: live
+      - key: PAYPAL_BASE_URL
+        value: https://api-m.sandbox.paypal.com
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CHANNEL3_API_KEY
+        sync: false
+      - key: APP_PASSWORD
+        sync: false
+      - key: AUTOPILOT_SECRET
+        generateValue: true
+      - key: RENDER_API_KEY
+        sync: false
+      - key: RENDER_WORKFLOW_TASK
+        value: kanakku-workflows/autopilot
+
+  # Autopilot on Render Workflows: each rule runs as its own task, in parallel, with retries
+  - type: workflow
+    name: kanakku-workflows
+    runtime: node
+    buildCommand: npm install --include=dev
+    startCommand: npm run workflows -w server
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: KANAKKU_URL
+        sync: false
+      - key: AUTOPILOT_SECRET
+        fromService:
+          type: web
+          name: kanakku
+          envVarKey: AUTOPILOT_SECRET
+
+  # Starts the Autopilot workflow every hour
+  - type: cron
+    name: kanakku-autopilot-hourly
+    runtime: node
+    schedule: "7 * * * *"
+    buildCommand: npm install --include=dev
+    startCommand: npm run trigger-autopilot -w server
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: RENDER_API_KEY
+        sync: false
+      - key: RENDER_WORKFLOW_TASK
+        value: kanakku-workflows/autopilot

@@ -1924,3 +1924,6 @@ button.kpi:focus-visible {
   font-size: 0.8rem;
   margin: 12px 0 0;
 }
+.tl-live > div {
+  border-left-color: var(--indigo);
+}

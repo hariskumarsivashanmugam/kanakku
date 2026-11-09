@@ -1,4 +1,5 @@
 import express, { type NextFunction, type Request, type Response } from "express";
+import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -7,6 +8,7 @@ import { getSource, getWorkshop } from "./data/index.js";
 import { DemoSource } from "./data/demoSource.js";
 import type { Transaction } from "./data/types.js";
 import { PayPalError } from "./paypal/client.js";
+import { handleWebhook, recentEvents, subscribe } from "./events.js";
 import { ask, writeBrief, type ChatTurn } from "./agent/agent.js";
 import { briefFacts } from "./agent/analytics.js";
 import { buildOverview } from "./agent/insights.js";
@@ -60,9 +62,43 @@ function txnRow(t: Transaction) {
   };
 }
 
+const same = (a: string, b: string) => {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+};
+
+/**
+ * When deployed publicly, set APP_PASSWORD so only you can open Kanakku (browser sign-in prompt).
+ * PayPal webhooks are checked by signature instead, and Render's Autopilot workflow uses AUTOPILOT_SECRET.
+ */
+function protect(req: Request, res: Response, next: NextFunction) {
+  const password = process.env.APP_PASSWORD;
+  if (!password) return next();
+  if (req.path === "/api/paypal/webhook" || req.path === "/api/status") return next();
+  const auth = req.headers.authorization ?? "";
+  const secret = process.env.AUTOPILOT_SECRET;
+  if (secret && req.path.startsWith("/api/autopilot") && auth.startsWith("Bearer ") && same(auth.slice(7), secret)) return next();
+  if (auth.startsWith("Basic ")) {
+    const pass = Buffer.from(auth.slice(6), "base64").toString().split(":").slice(1).join(":");
+    if (same(pass, password)) return next();
+  }
+  res.setHeader("WWW-Authenticate", 'Basic realm="Kanakku", charset="UTF-8"');
+  res.status(401).send("Sign in to Kanakku");
+}
+
 export function createApp() {
   const app = express();
   app.use(express.json({ limit: "200kb" }));
+  app.use(protect);
+
+  // ---------- live updates from PayPal ----------
+
+  app.post("/api/paypal/webhook", handleWebhook);
+  app.get("/api/events", subscribe);
+  app.get("/api/events/recent", (_req, res) => {
+    res.json(recentEvents());
+  });
 
   app.get("/api/status", (_req, res) => {
     res.json({ dataMode: getSource().mode, aiReady: Boolean(config.anthropicKey), model: config.model, priceCheckReady: Boolean(config.channel3.key) });
@@ -199,8 +235,9 @@ export function createApp() {
 
   app.post("/api/autopilot/run", async (req, res) => {
     const trigger = ["manual", "schedule", "webhook", "external"].includes(req.body?.trigger) ? req.body.trigger : "manual";
+    const ruleIds = Array.isArray(req.body?.ruleIds) ? req.body.ruleIds.map(String) : undefined;
     try {
-      res.json(await runAutopilot(trigger));
+      res.json(await runAutopilot(trigger, ruleIds));
     } catch (e) {
       res.status(409).json({ error: (e as Error).message });
     }

@@ -275,3 +275,93 @@ test("drafts still work when the model answers in plain text", async () => {
   const { message } = await (await post("/api/ai/dispute-reply", { disputeId: dispute.id })).json();
   assert.equal(message, "Hello, I'm sorry for the trouble.");
 });
+
+test("workshop: pay a finished job once, and paid jobs are locked", async () => {
+  const w = await (await fetch(`${base}/api/workshop`)).json();
+  const job = w.jobs.find((j: any) => j.status === "done");
+  const planned = w.jobs.find((j: any) => j.status === "planned");
+  // Not finished yet → refused
+  const early = await post("/api/actions/propose", { tool: "propose_artisan_payouts", input: { job_ids: [planned.id], reason: "x" } });
+  assert.equal(early.status, 400);
+  const a1 = await (await post("/api/actions/propose", { tool: "propose_artisan_payouts", input: { job_ids: [job.id], reason: "done" } })).json();
+  const a2 = await (await post("/api/actions/propose", { tool: "propose_artisan_payouts", input: { job_ids: [job.id], reason: "again" } })).json();
+  assert.equal(a1.moneyOut.amount, job.pay);
+  assert.equal((await (await post(`/api/actions/${a1.id}/approve`)).json()).status, "done");
+  const second = await (await post(`/api/actions/${a2.id}/approve`)).json();
+  assert.equal(second.status, "failed", "the second approval must not pay again");
+  assert.match(second.steps[0].result, /Already paid/);
+  const after = (await (await fetch(`${base}/api/workshop`)).json()).jobs.find((j: any) => j.id === job.id);
+  assert.equal(after.status, "paid");
+  const move = await fetch(`${base}/api/workshop/jobs/${job.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ start: "2030-01-01", end: "2030-01-05" }) });
+  assert.equal(move.status, 400);
+  // Dragging a planned job to another artisan works
+  const moved = await (await fetch(`${base}/api/workshop/jobs/${planned.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ artisanId: "a1" }) })).json();
+  assert.equal(moved.artisanId, "a1");
+});
+
+test("autopilot respects limits and never repeats itself", async () => {
+  await post("/api/demo/reset");
+  // Payouts up to USD 100 per job: Kamala's USD 90 is paid, Fatima's USD 180 waits for approval.
+  await fetch(`${base}/api/autopilot/rules/pay_finished_jobs`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "auto", params: { maxPerJob: 100 } }) });
+  const run = await (await post("/api/autopilot/run", { trigger: "manual" })).json();
+  const pay = run.results.find((r: any) => r.ruleId === "pay_finished_jobs");
+  assert.equal(pay.outcome, "did");
+  assert.match(pay.summary, /Kamala Devi USD 90/);
+  assert.match(pay.summary, /1 payout waiting for your approval/);
+  const remind = run.results.find((r: any) => r.ruleId === "remind_overdue");
+  assert.equal(remind.outcome, "did");
+  const again = await (await post("/api/autopilot/run", { trigger: "manual" })).json();
+  assert.ok(again.results.every((r: any) => r.outcome === "nothing" || /still waiting/.test(r.summary)), "second run proposes nothing new");
+  const actions = await (await fetch(`${base}/api/actions`)).json();
+  assert.equal(actions.filter((a: any) => a.type === "artisan_payout").length, 2);
+  // "Ask me first" can't be turned into auto for dispute replies
+  const bad = await fetch(`${base}/api/autopilot/rules/dispute_deadlines`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "auto" }) });
+  assert.equal(bad.status, 400);
+});
+
+test("price check compares with Channel3 results", async () => {
+  const http = await import("node:http");
+  const c3 = http.createServer((req, res) => {
+    res.writeHead(req.headers["x-api-key"] === "k" ? 200 : 401, { "content-type": "application/json" });
+    res.end(JSON.stringify({ products: [30, 40, 50, 60, 70, 80].map((p, i) => ({ title: `Stole ${i}`, offers: [{ domain: "shop.example", price: { price: p, currency: "USD" } }] })) }));
+  });
+  await new Promise<void>((r) => c3.listen(0, r));
+  const { config } = await import("../src/config.js");
+  config.channel3.key = "k";
+  config.channel3.baseUrl = `http://127.0.0.1:${(c3.address() as AddressInfo).port}`;
+  try {
+    const pc = await (await fetch(`${base}/api/price-check?product=${encodeURIComponent("Ajrakh stole")}`)).json();
+    assert.equal(pc.yourPrice, 46);
+    assert.equal(pc.median, 55);
+    assert.equal(pc.verdict, "below", "46 is 16% under the 55 median");
+    assert.equal(pc.comparables.length, 6);
+  } finally {
+    c3.close();
+    config.channel3.key = "";
+  }
+});
+
+test("app password protects everything except the PayPal webhook", async () => {
+  process.env.APP_PASSWORD = "s3cret";
+  process.env.AUTOPILOT_SECRET = "auto";
+  try {
+    assert.equal((await fetch(`${base}/api/overview`)).status, 401);
+    const ok = await fetch(`${base}/api/overview`, { headers: { Authorization: "Basic " + Buffer.from("me:s3cret").toString("base64") } });
+    assert.equal(ok.status, 200);
+    assert.equal((await fetch(`${base}/api/autopilot`, { headers: { Authorization: "Bearer auto" } })).status, 200);
+    assert.equal((await fetch(`${base}/api/actions`, { headers: { Authorization: "Bearer auto" } })).status, 401, "the workflow secret only opens Autopilot");
+    // Webhooks get through the password but must carry a valid PayPal signature.
+    assert.equal((await post("/api/paypal/webhook", { event_type: "CUSTOMER.DISPUTE.CREATED" })).status, 400);
+  } finally {
+    delete process.env.APP_PASSWORD;
+    delete process.env.AUTOPILOT_SECRET;
+  }
+});
+
+test("PayPal webhook events become readable notifications", async () => {
+  const { describe } = await import("../src/events.js");
+  const d = describe({ id: "WH-1", event_type: "CUSTOMER.DISPUTE.CREATED", resource: { dispute_amount: { value: "85.00", currency_code: "USD" } } });
+  assert.equal(d?.title, "New dispute USD 85.00");
+  assert.equal(d?.page, "disputes");
+  assert.equal(describe({ event_type: "SOMETHING.ELSE" }), null);
+});

@@ -60,6 +60,11 @@ export class PayPalSource implements DataSource {
     return out.filter((t) => t.date >= range.start && t.date <= range.end);
   }
 
+  /** Forget cached orders, e.g. after a webhook says something changed. */
+  clearCache() {
+    this.orderCache.clear();
+  }
+
   /** Remembers orders created outside Transaction Search's reach (e.g. by the seed script). */
   rememberOrders(orderIds: string[]) {
     addToLedger(config.paypal.baseUrl, config.paypal.clientId, orderIds);

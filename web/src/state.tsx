@@ -69,6 +69,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [assistant, setAssistant] = useState({ open: false, prompt: null as string | null, nonce: 0 });
   const [toasts, setToasts] = useState<Toast[]>([]);
 
+  // Live updates from PayPal webhooks (server-sent events).
+  useEffect(() => {
+    if (typeof EventSource === "undefined") return;
+    const es = new EventSource("/api/events");
+    es.onmessage = (m) => {
+      try {
+        const e = JSON.parse(m.data) as { title: string };
+        setToasts((t) => [...t, { id: toastId++, text: `PayPal: ${e.title}`, tone: "ok" }]);
+        setDataVersion((v) => v + 1);
+        api.actions().then((list) => setActions(Object.fromEntries(list.map((a) => [a.id, a]))), () => {});
+      } catch {
+        /* ignore malformed events */
+      }
+    };
+    return () => es.close();
+  }, []);
+
   useEffect(() => {
     api.status().then(setStatus, () => setStatus(null));
     api.actions().then((list) => setActions(Object.fromEntries(list.map((a) => [a.id, a]))), () => {});

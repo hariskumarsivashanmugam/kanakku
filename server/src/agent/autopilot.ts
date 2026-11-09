@@ -104,7 +104,7 @@ function defaults(): State {
   };
 }
 
-const file = process.env.KANAKKU_AUTOPILOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../.kanakku/autopilot.json");
+const file = process.env.KANAKKU_AUTOPILOT || path.join(process.env.KANAKKU_DIR || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../.kanakku"), "autopilot.json");
 
 let state: State | null = null;
 let persist = false;
@@ -334,15 +334,19 @@ async function runRule(rule: Rule): Promise<RuleResult> {
   }
 }
 
+/** Rules currently running, so the same rule never runs twice at once (e.g. a schedule and a webhook). */
+const busy = new Set<RuleType>();
 let running = false;
 
-export async function runAutopilot(trigger: Run["trigger"]): Promise<Run> {
-  if (running) throw new Error("Autopilot is already running.");
+export async function runAutopilot(trigger: Run["trigger"], ruleIds?: string[]): Promise<Run> {
+  const s = load();
+  const rules = s.rules.filter((r) => r.enabled && (!ruleIds || ruleIds.includes(r.id)));
+  if (rules.some((r) => busy.has(r.id))) throw new Error("Autopilot is already running.");
+  for (const r of rules) busy.add(r.id);
   running = true;
   try {
-    const s = load();
     const results: RuleResult[] = [];
-    for (const rule of s.rules.filter((r) => r.enabled)) {
+    for (const rule of rules) {
       try {
         results.push(await runRule(rule));
       } catch (e) {
@@ -355,7 +359,8 @@ export async function runAutopilot(trigger: Run["trigger"]): Promise<Run> {
     save();
     return run;
   } finally {
-    running = false;
+    for (const r of rules) busy.delete(r.id);
+    running = busy.size > 0;
   }
 }
 

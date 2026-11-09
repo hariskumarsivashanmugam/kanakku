@@ -1,9 +1,11 @@
 import { api } from "../api";
 import { ActionCard, stateLabel } from "../ActionCard";
-import { useApp } from "../state";
+import { useApp, useData } from "../state";
+import { navigate, type Page } from "../router";
 
 export function Activity() {
   const { actions, decide, status } = useApp();
+  const events = useData(api.recentEvents);
   const list = Object.values(actions).sort((a, b) => (b.decidedAt ?? b.createdAt).localeCompare(a.decidedAt ?? a.createdAt));
   const pending = list.filter((a) => a.status === "pending");
   const done = list.filter((a) => a.status !== "pending");
@@ -39,6 +41,30 @@ export function Activity() {
               <ActionCard key={a.id} action={a} onDecide={decide} />
             ))}
           </div>
+        </section>
+      )}
+
+      {events.data && events.data.length > 0 && (
+        <section aria-labelledby="live-title" className="activity-section">
+          <h2 id="live-title">Live from PayPal</h2>
+          <ol className="timeline">
+            {events.data.map((e) => (
+              <li key={e.id} className="tl tl-live">
+                <time dateTime={e.at}>{new Date(e.at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</time>
+                <div>
+                  <strong>{e.title}</strong>
+                  <p className="tl-source">
+                    {e.detail}{" "}
+                    {e.page && (
+                      <button className="link" onClick={() => navigate(e.page as Page)}>
+                        Open
+                      </button>
+                    )}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ol>
         </section>
       )}
 

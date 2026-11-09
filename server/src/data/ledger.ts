@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
  * without waiting for Transaction Search. Only ids are stored here; the data always comes from PayPal.
  */
 
-const file = process.env.KANAKKU_LEDGER || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../.kanakku/sandbox-orders.json");
+const file = process.env.KANAKKU_LEDGER || path.join(process.env.KANAKKU_DIR || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../.kanakku"), "sandbox-orders.json");
 
 interface Ledger {
   baseUrl: string;

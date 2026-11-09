@@ -90,7 +90,7 @@ export function defaultWorkshop(): WorkshopData {
 }
 
 /** Where the live workshop is saved. Demo mode keeps it in memory. */
-const file = process.env.KANAKKU_WORKSHOP || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../.kanakku/workshop.json");
+const file = process.env.KANAKKU_WORKSHOP || path.join(process.env.KANAKKU_DIR || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../.kanakku"), "workshop.json");
 
 export class WorkshopStore {
   private data: WorkshopData;

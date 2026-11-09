@@ -13,7 +13,8 @@
     "build": "npm run build -w web",
     "start": "npm run start -w server",
     "test": "npm test -w server",
-    "seed": "npm run seed -w server"
+    "seed": "npm run seed -w server --",
+    "webhook": "npm run webhook -w server --"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"
